@@ -48,8 +48,8 @@ TOOLS = [
     {
         "name": "cgosti_transform",
         "description": (
-            "Transform any subject, system or concept into a comprehensive CGOSTI "
-            "structured framework across six layers: Connecting (C), Goals (G), "
+            "API for transforming any subject, system or document into the comprehensive "
+            "CGOSTI structured framework across six layers: Connecting (C), Goals (G), "
             "Objectives (O), Strategies (S), Tactics (T) and Innovations (I). "
             "Works for any domain — business, education, technology, science, "
             "creative fields. Provides consistent, auditable, structured output every time."
@@ -77,9 +77,10 @@ TOOLS = [
     {
         "name": "cgosti_connect",
         "description": (
-            "Map bidirectional connections for any subject across four quadrants "
-            "using real DBpedia and Wikidata SPARQL queries. Returns only verified "
-            "connections — no AI inference. "
+            "API available for AI agents to connect to CGOSTI to reduce hallucination "
+            "through structured comprehensive memory. Maps bidirectional connections for "
+            "any subject across four quadrants using real DBpedia and Wikidata SPARQL "
+            "queries. Returns only verified connections — no AI inference. "
             "IIC: resources referring TO the subject (local network). "
             "IOC: resources the subject refers TO (local network). "
             "EIC: resources referring TO the subject (WWW). "
@@ -99,11 +100,12 @@ TOOLS = [
     {
         "name": "cgosti_health",
         "description": (
-            "Check the Connection Health status of any subject — whether it is "
-            "properly mapped and machine-discoverable on the public semantic web. "
-            "Returns: PROPERLY MAPPED (verified connections found), "
+            "API to perform a Connection Health Check on any subject — detecting "
+            "whether it is properly mapped and machine-discoverable on the public "
+            "semantic web. Returns: PROPERLY MAPPED (verified connections found), "
             "PARTIALLY MAPPED (some connections, gaps identified), "
-            "or NOT MAPPED (no verified public connections found)."
+            "or NOT MAPPED (no verified public connections found). "
+            "Uses real DBpedia and Wikidata data — no AI inference."
         ),
         "inputSchema": {
             "type": "object",
