@@ -15,11 +15,29 @@ Deployed independently from the CGOSTI Transformer app.
 
 import os
 import requests
+import logging
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 CORS(app)
+
+def log_tool_call(tool_name, subject=None):
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    ua = request.headers.get("User-Agent", "unknown")
+    logger.info(
+        f"TOOL_CALL | tool={tool_name} | subject={subject or 'N/A'} | "
+        f"ip={ip} | ua={ua} | time={datetime.utcnow().isoformat()}Z"
+    )
 
 CGOSTI_API = "https://cgosti.mightyunits.com"
 
@@ -358,6 +376,8 @@ def mcp_handler():
 
         if not subject:
             return err(-32602, "subject is required")
+
+        log_tool_call(tool_name, subject)
 
         if tool_name == "cgosti_transform":
             result = call_transform(subject, args.get("layers"))
