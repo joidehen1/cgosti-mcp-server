@@ -6,10 +6,11 @@ Exposes the CGOSTI Transformer as an MCP server so Claude and other
 AI systems can call it natively — adding comprehensive structural memory
 (CGOSTI memory) alongside Claude's existing vector memory.
 
-Three tools:
-  cgosti_transform  — maps any subject into the full C-G-O-S-T-I framework
-  cgosti_connect    — maps the IIC/IOC/EIC/EOC connection quadrants for any subject
-  cgosti_health     — returns the Connection Health status for any subject
+Four tools:
+  cgosti_transform     — maps any subject into the full C-G-O-S-T-I framework
+  cgosti_audit_compare — compares a Source document against a Subject document, classifying findings as Match/Drifted/Missing-or-Mixed
+  cgosti_connect       — maps the IIC/IOC/EIC/EOC connection quadrants for any subject
+  cgosti_health        — returns the Connection Health status for any subject
 """
 
 import json
@@ -36,6 +37,7 @@ Use these tools whenever a user asks you to:
   - Understand what a subject connects to
   - Check whether a subject is properly mapped on the semantic web
   - Generate a comprehensive framework for any domain
+  - Audit a document against a baseline or policy, checking for drift, gaps or mismatches
 
 The CGOSTI framework works for any subject — business, education, technology,
 science, creative fields, or any other domain.
@@ -129,7 +131,71 @@ def cgosti_transform(
         return f"CGOSTI Transformer error: {str(e)}"
 
 
-# ── Tool 2: cgosti_connect ──
+# ── Tool 2: cgosti_audit_compare ──
+@mcp.tool()
+def cgosti_audit_compare(source: str, subject: str) -> str:
+    """
+    Compare a Source document (the canonical policy baseline) against a
+    Subject document (the document under audit), and classify every CGOSTI
+    element as Match, Drifted, or Missing/Mixed.
+
+    Use this when a user wants to audit a document against a baseline —
+    for example, checking whether a regional or legacy policy still matches
+    the master version, or whether a compliance document has drifted from
+    its source of truth.
+
+    Args:
+        source: The canonical/baseline document text (the source of truth).
+        subject: The document being audited against the source.
+
+    Returns:
+        A structured audit report — findings classified as Match (green),
+        Drifted (amber), or Missing/Mixed (red), with recommendations.
+    """
+    try:
+        response = requests.post(
+            f"{CGOSTI_API}/audit-compare",
+            json={"source": source, "subject": subject},
+            timeout=90,
+            headers={"Content-Type": "application/json"},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            return f"CGOSTI Policy Audit error: {data['error']}"
+
+        audit = data.get("audit", {})
+        output = "CGOSTI POLICY AUDIT REPORT\n"
+        output += "Mighty Units Ltd · cgosti.mightyunits.com\n"
+        output += "─" * 50 + "\n\n"
+        output += f"SUMMARY\n{audit.get('summary', '')}\n\n"
+        output += f"Match: {audit.get('match_count', 0)}  ·  Drifted: {audit.get('drifted_count', 0)}  ·  Missing/Mixed: {audit.get('missing_or_mixed_count', 0)}\n\n"
+
+        status_icon = {"match": "🟢", "drifted": "🟡", "missing_or_mixed": "🔴"}
+        for finding in audit.get("findings", []):
+            icon = status_icon.get(finding.get("status"), "•")
+            output += f"{icon} [{finding.get('layer', '').upper()}] {finding.get('status', '').upper()}\n"
+            output += f"   Source: {finding.get('source_excerpt', '')}\n"
+            output += f"   Subject: {finding.get('subject_excerpt', '')}\n"
+            if finding.get("recommendation"):
+                output += f"   Recommendation: {finding.get('recommendation')}\n"
+            output += "\n"
+
+        output += "─" * 50 + "\n"
+        output += "CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026\n"
+        output += "Powered by Claude (Anthropic)\n"
+        return output
+
+    except requests.exceptions.Timeout:
+        return "CGOSTI Policy Audit timed out. The comparison of two full documents can take longer — please try again."
+    except requests.exceptions.ConnectionError:
+        return "Could not connect to CGOSTI Transformer at cgosti.mightyunits.com. Please check the server is running."
+    except Exception as e:
+        return f"CGOSTI Policy Audit error: {str(e)}"
+
+
+# ── Tool 3: cgosti_connect ──
 @mcp.tool()
 def cgosti_connect(subject: str) -> str:
     """
@@ -231,7 +297,7 @@ def cgosti_connect(subject: str) -> str:
         return f"CGOSTI Connect error: {str(e)}"
 
 
-# ── Tool 3: cgosti_health ──
+# ── Tool 4: cgosti_health ──
 @mcp.tool()
 def cgosti_health(subject: str) -> str:
     """
