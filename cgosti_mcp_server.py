@@ -14,7 +14,9 @@ Four tools:
 """
 
 import json
+import os
 import requests
+import anthropic
 from mcp.server.fastmcp import FastMCP
 
 # ── Server definition ──
@@ -45,6 +47,29 @@ science, creative fields, or any other domain.
 )
 
 CGOSTI_API = "https://cgosti.mightyunits.com"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+# Self-contained comparison prompt — lives here, not in app.py. The audit
+# feature's structuring step reuses the Transformer's existing /transform
+# endpoint (legitimate, pre-existing capability), but the comparison logic
+# itself is entirely native to this MCP server.
+SYSTEM_PROMPT_AUDIT_COMPARE = """You are the CGOSTI Policy Audit Comparator for Mighty Units Ltd.
+
+You are given two CGOSTI structures — a SOURCE (the canonical policy baseline) and a SUBJECT (the document under audit). Both have already been transformed into CGOSTI structure (Goal, Objectives, Strategy, Tactics).
+
+Your task: compare the SOURCE structure against the SUBJECT structure, field by field, and classify each element into exactly one of three states:
+
+1. MATCH (green) — the element is present in both SOURCE and SUBJECT with materially the same meaning.
+2. DRIFTED (amber) — the element is present in both, but the SUBJECT version has diverged from the SOURCE in a way that changes its meaning, scope, or requirement.
+3. MISSING_OR_MIXED (red) — either the element from SOURCE is entirely absent from SUBJECT (missing), or the SUBJECT contains content that does not correspond to anything in SOURCE and appears to have been blended in from an unrelated context (mixed).
+
+For every finding, state clearly which of the three categories it belongs to, quote the specific SOURCE and SUBJECT text being compared (briefly, not the full document), and give one concise recommendation for resolving it if it is DRIFTED or MISSING_OR_MIXED.
+
+Return ONLY valid JSON. No markdown. No backticks.
+Keys:
+  findings (array of objects, each with: layer [one of "goal","objectives","strategy","tactics"], status ["match","drifted","missing_or_mixed"], source_excerpt, subject_excerpt, recommendation),
+  summary (string — one paragraph overview of overall compliance health),
+  match_count (integer), drifted_count (integer), missing_or_mixed_count (integer)."""
 
 
 # ── Tool 1: cgosti_transform ──
@@ -152,20 +177,46 @@ def cgosti_audit_compare(source: str, subject: str) -> str:
         A structured audit report — findings classified as Match (green),
         Drifted (amber), or Missing/Mixed (red), with recommendations.
     """
+    if not ANTHROPIC_API_KEY:
+        return "CGOSTI Policy Audit error: ANTHROPIC_API_KEY not configured on the MCP server."
+
     try:
-        response = requests.post(
-            f"{CGOSTI_API}/audit-compare",
-            json={"source": source, "subject": subject},
-            timeout=90,
-            headers={"Content-Type": "application/json"},
+        # Step 1: structure both documents using the Transformer's existing,
+        # pre-existing /transform endpoint — same capability cgosti_transform
+        # already relies on, not a new addition to app.py.
+        def structure_one(text):
+            resp = requests.post(
+                f"{CGOSTI_API}/transform",
+                json={"input": text, "layers": ["G", "O", "S", "T"]},
+                timeout=60,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        source_structure = structure_one(source)
+        subject_structure = structure_one(subject)
+
+        if "error" in source_structure or "error" in subject_structure:
+            return f"CGOSTI Policy Audit error: could not structure one of the documents."
+
+        # Step 2: comparison logic is entirely native to this MCP server —
+        # a direct Anthropic call, not routed through app.py at all.
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        compare_msg = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=4096, temperature=0,
+            system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_COMPARE, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content":
+                "SOURCE structure:\n" + json.dumps(source_structure) +
+                "\n\nSUBJECT structure:\n" + json.dumps(subject_structure)}]
         )
-        response.raise_for_status()
-        data = response.json()
+        raw_compare = compare_msg.content[0].text.replace("```json", "").replace("```", "").strip()
 
-        if "error" in data:
-            return f"CGOSTI Policy Audit error: {data['error']}"
+        try:
+            audit = json.loads(raw_compare)
+        except json.JSONDecodeError:
+            return "CGOSTI Policy Audit error: the comparison response was too long and got cut off. Try shorter documents."
 
-        audit = data.get("audit", {})
         output = "CGOSTI POLICY AUDIT REPORT\n"
         output += "Mighty Units Ltd · cgosti.mightyunits.com\n"
         output += "─" * 50 + "\n\n"
