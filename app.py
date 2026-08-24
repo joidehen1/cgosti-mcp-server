@@ -523,7 +523,12 @@ def mcp_handler():
 @app.route("/audit-compare", methods=["POST", "OPTIONS"])
 def audit_compare_http():
     if request.method == "OPTIONS":
-        return jsonify({"status": "ok"}), 200
+        resp = jsonify({"status": "ok"})
+        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
 
     body = request.get_json()
     if not body:
