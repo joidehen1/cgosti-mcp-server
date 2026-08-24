@@ -14,7 +14,9 @@ Deployed independently from the CGOSTI Transformer app.
 """
 
 import os
+import json
 import requests
+import anthropic
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -22,6 +24,25 @@ app = Flask(__name__)
 CORS(app)
 
 CGOSTI_API = "https://cgosti.mightyunits.com"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+SYSTEM_PROMPT_AUDIT_COMPARE = """You are the CGOSTI Policy Audit Comparator for Mighty Units Ltd.
+
+You are given two CGOSTI structures — a SOURCE (the canonical policy baseline) and a SUBJECT (the document under audit). Both have already been transformed into CGOSTI structure (Goal, Objectives, Strategy, Tactics).
+
+Your task: compare the SOURCE structure against the SUBJECT structure, field by field, and classify each element into exactly one of three states:
+
+1. MATCH (green) — the element is present in both SOURCE and SUBJECT with materially the same meaning.
+2. DRIFTED (amber) — the element is present in both, but the SUBJECT version has diverged from the SOURCE in a way that changes its meaning, scope, or requirement.
+3. MISSING_OR_MIXED (red) — either the element from SOURCE is entirely absent from SUBJECT (missing), or the SUBJECT contains content that does not correspond to anything in SOURCE and appears to have been blended in from an unrelated context (mixed).
+
+For every finding, state clearly which of the three categories it belongs to, quote the specific SOURCE and SUBJECT text being compared (briefly, not the full document), and give one concise recommendation for resolving it if it is DRIFTED or MISSING_OR_MIXED.
+
+Return ONLY valid JSON. No markdown. No backticks.
+Keys:
+  findings (array of objects, each with: layer [one of "goal","objectives","strategy","tactics"], status ["match","drifted","missing_or_mixed"], source_excerpt, subject_excerpt, recommendation),
+  summary (string — one paragraph overview of overall compliance health),
+  match_count (integer), drifted_count (integer), missing_or_mixed_count (integer)."""
 
 MCP_SERVER_INFO = {
     "protocolVersion": "2024-11-05",
@@ -114,6 +135,31 @@ TOOLS = [
                 }
             },
             "required": ["subject"]
+        }
+    },
+    {
+        "name": "cgosti_audit_compare",
+        "description": (
+            "Compare a Source document (the canonical policy baseline) against a "
+            "Subject document (the document under audit), and classify every CGOSTI "
+            "element as Match, Drifted, or Missing/Mixed. Use this to audit a document "
+            "against a baseline — for example, checking whether a regional or legacy "
+            "policy still matches the master version, or whether a compliance document "
+            "has drifted from its source of truth."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "The canonical/baseline document text (the source of truth)."
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "The document being audited against the source."
+                }
+            },
+            "required": ["source", "subject"]
         }
     }
 ]
@@ -297,6 +343,90 @@ def call_health(subject):
         return f"CGOSTI Health error: {str(e)}"
 
 
+def _structure_one(text):
+    """Structure a single document via the Transformer's existing /transform endpoint."""
+    resp = requests.post(
+        f"{CGOSTI_API}/transform",
+        json={"input": text, "layers": ["G", "O", "S", "T"]},
+        timeout=60,
+        headers={"Content-Type": "application/json"}
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def run_audit_compare(source, subject):
+    """
+    Core audit-compare logic. Returns a dict, not a formatted string, so both
+    the MCP tool (call_audit_compare) and the plain HTTP route can format it
+    however they need.
+    """
+    if not ANTHROPIC_API_KEY:
+        return {"error": "ANTHROPIC_API_KEY not configured on the MCP server."}
+
+    source_structure = _structure_one(source)
+    subject_structure = _structure_one(subject)
+
+    if "error" in source_structure or "error" in subject_structure:
+        return {"error": "Could not structure one of the documents."}
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    compare_msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=4096, temperature=0,
+        system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_COMPARE, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content":
+            "SOURCE structure:\n" + json.dumps(source_structure) +
+            "\n\nSUBJECT structure:\n" + json.dumps(subject_structure)}]
+    )
+    raw_compare = compare_msg.content[0].text.replace("```json", "").replace("```", "").strip()
+
+    try:
+        audit = json.loads(raw_compare)
+    except json.JSONDecodeError:
+        return {"error": "The comparison response was too long and got cut off. Try shorter documents."}
+
+    return {
+        "source_structure": source_structure,
+        "subject_structure": subject_structure,
+        "audit": audit,
+    }
+
+
+def call_audit_compare(source, subject):
+    """MCP-tool-style wrapper — returns a formatted text block, same pattern as call_transform etc."""
+    try:
+        result = run_audit_compare(source, subject)
+        if "error" in result:
+            return f"CGOSTI Policy Audit error: {result['error']}"
+
+        audit = result.get("audit", {})
+        out = "CGOSTI POLICY AUDIT REPORT\n"
+        out += "Mighty Units Ltd · cgosti.mightyunits.com\n"
+        out += "─" * 50 + "\n\n"
+        out += f"SUMMARY\n{audit.get('summary', '')}\n\n"
+        out += f"Match: {audit.get('match_count', 0)}  ·  Drifted: {audit.get('drifted_count', 0)}  ·  Missing/Mixed: {audit.get('missing_or_mixed_count', 0)}\n\n"
+
+        status_icon = {"match": "🟢", "drifted": "🟡", "missing_or_mixed": "🔴"}
+        for finding in audit.get("findings", []):
+            icon = status_icon.get(finding.get("status"), "•")
+            out += f"{icon} [{finding.get('layer', '').upper()}] {finding.get('status', '').upper()}\n"
+            out += f"   Source: {finding.get('source_excerpt', '')}\n"
+            out += f"   Subject: {finding.get('subject_excerpt', '')}\n"
+            if finding.get("recommendation"):
+                out += f"   Recommendation: {finding.get('recommendation')}\n"
+            out += "\n"
+
+        out += "─" * 50 + "\n"
+        out += "CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026\n"
+        out += "Powered by Claude (Anthropic)\n"
+        return out
+
+    except requests.exceptions.Timeout:
+        return "CGOSTI Policy Audit timed out. Please try again."
+    except Exception as e:
+        return f"CGOSTI Policy Audit error: {str(e)}"
+
+
 # ── Routes ──
 
 @app.route("/", methods=["GET"])
@@ -352,8 +482,19 @@ def mcp_handler():
     elif method == "tools/call":
         tool_name = params.get("name")
         args = params.get("arguments", {})
-        subject = args.get("subject", "")
 
+        if tool_name == "cgosti_audit_compare":
+            source_doc = args.get("source", "")
+            subject_doc = args.get("subject", "")
+            if not source_doc or not subject_doc:
+                return err(-32602, "Both 'source' and 'subject' are required")
+            result = call_audit_compare(source_doc, subject_doc)
+            return ok({
+                "content": [{"type": "text", "text": result}],
+                "isError": False
+            })
+
+        subject = args.get("subject", "")
         if not subject:
             return err(-32602, "subject is required")
 
@@ -376,6 +517,23 @@ def mcp_handler():
 
     else:
         return err(-32601, f"Method not found: {method}")
+
+
+@app.route("/audit-compare", methods=["POST"])
+def audit_compare_http():
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    source = (body.get("source") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    if not source or not subject:
+        return jsonify({"error": "Both 'source' and 'subject' are required."}), 400
+
+    result = run_audit_compare(source, subject)
+    if "error" in result:
+        return jsonify(result), 500
+    return jsonify(result)
 
 
 if __name__ == "__main__":
