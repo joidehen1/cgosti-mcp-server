@@ -21,7 +21,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False,
+     methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
 
 CGOSTI_API = "https://cgosti.mightyunits.com"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -519,8 +520,11 @@ def mcp_handler():
         return err(-32601, f"Method not found: {method}")
 
 
-@app.route("/audit-compare", methods=["POST"])
+@app.route("/audit-compare", methods=["POST", "OPTIONS"])
 def audit_compare_http():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     body = request.get_json()
     if not body:
         return jsonify({"error": "Invalid JSON"}), 400
