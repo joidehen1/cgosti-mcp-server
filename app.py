@@ -17,6 +17,7 @@ import os
 import json
 import requests
 import anthropic
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -560,8 +561,15 @@ def run_audit_compare(source, subject):
     if not ANTHROPIC_API_KEY:
         return {"error": "ANTHROPIC_API_KEY not configured on the MCP server."}
 
-    source_structure = _structure_one(source)
-    subject_structure = _structure_one(subject)
+    # Run both structuring calls in parallel — they're independent of each
+    # other, only the comparison step needs both results. This roughly
+    # halves total wait time and reduces the risk of hitting Render's
+    # platform-level proxy timeout (502).
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        source_future = executor.submit(_structure_one, source)
+        subject_future = executor.submit(_structure_one, subject)
+        source_structure = source_future.result()
+        subject_structure = subject_future.result()
 
     if "error" in source_structure or "error" in subject_structure:
         return {"error": "Could not structure one of the documents."}
