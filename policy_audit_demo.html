@@ -383,13 +383,25 @@
 
   function highlightBySubstring(containerId, excerpt, hlClass) {
     if (!excerpt) return;
-    var excerptNorm = excerpt.toLowerCase().slice(0, 40);
+    var excerptNorm = excerpt.toLowerCase();
     var container = document.getElementById(containerId);
     if (!container) return;
     container.querySelectorAll('.struct-line').forEach(function(el) {
       var lineText = el.textContent.toLowerCase();
-      if (lineText.includes(excerptNorm) || excerptNorm.includes(lineText.slice(0, 40))) {
+      // Full-line prefix check (original behaviour, still useful for single-field lines)
+      if (lineText.slice(0, 40) && (excerptNorm.includes(lineText.slice(0, 40)) || lineText.includes(excerptNorm.slice(0, 40)))) {
         el.classList.add(hlClass);
+        return;
+      }
+      // Segment check — handles combined "field: value | field: value" lines where
+      // only ONE field is referenced in the finding's excerpt, not the whole line.
+      var segments = lineText.split('|').map(function(s) { return s.trim(); }).filter(Boolean);
+      for (var i = 0; i < segments.length; i++) {
+        var seg = segments[i].slice(0, 30);
+        if (seg && excerptNorm.includes(seg)) {
+          el.classList.add(hlClass);
+          return;
+        }
       }
     });
   }
