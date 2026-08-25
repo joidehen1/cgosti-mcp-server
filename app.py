@@ -239,6 +239,8 @@ Your task: compare the SOURCE structure against the SUBJECT structure, field by 
 
 EXHAUSTIVENESS REQUIREMENT: You must generate one finding for EVERY individual field present in either SOURCE or SUBJECT tactics, objectives, goal and strategy — not just the ones that seem most significant. If SOURCE tactics has a "worker.site" field, that field must have its own finding entry, even if the same underlying difference is also reflected elsewhere. Do not summarise multiple fields into fewer findings than the number of fields that actually exist. Every field the user could see in the raw structure must be traceable to exactly one finding.
 
+NO DUPLICATES REQUIREMENT: Each distinct SOURCE field must appear in EXACTLY ONE finding — never zero, never more than one. Before finalising your output, check every finding's source_excerpt: no two findings may have the same or overlapping source_excerpt. If you notice you are about to describe the same SOURCE field a second time, do not create a second finding — you have already covered it. A field's classification (match / drifted / missing_or_mixed) must be internally consistent — never assign two different classifications to the same field pair.
+
 QUOTING REQUIREMENT: source_excerpt and subject_excerpt must be an exact, character-for-character quote taken directly from the SOURCE and SUBJECT structures provided to you — copy the text exactly as it appears, including the same labels, spacing and punctuation. Do not paraphrase, reword, or summarise the excerpt text, even slightly. If a field is a single line such as "worker.site: Northstar Central", the excerpt must be exactly that string, not a rephrased description of it.
 
 For every finding, state clearly which of the three categories it belongs to, quote the specific SOURCE and SUBJECT text being compared (briefly, not the full document), and give one concise recommendation for resolving it if it is DRIFTED or MISSING_OR_MIXED.
@@ -590,6 +592,27 @@ def _structure_one(text):
     return result
 
 
+def _dedupe_findings(findings):
+    """
+    Safety net against duplicate/contradictory findings from the comparison
+    step — e.g. the same source_excerpt appearing twice with different
+    (contradictory) status values. Keeps only the FIRST finding seen for
+    each normalized source_excerpt; drops any later duplicate, regardless
+    of whether its status agrees or disagrees with the first.
+    """
+    seen = set()
+    deduped = []
+    for finding in findings:
+        excerpt = (finding.get("source_excerpt") or "").strip().lower()
+        key = excerpt[:80]
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        deduped.append(finding)
+    return deduped
+
+
 def run_audit_compare(source, subject):
     """
     Core audit-compare logic. Returns a dict, not a formatted string, so both
@@ -626,6 +649,11 @@ def run_audit_compare(source, subject):
         audit = json.loads(raw_compare)
     except json.JSONDecodeError:
         return {"error": "The comparison response was too long and got cut off. Try shorter documents."}
+
+    audit["findings"] = _dedupe_findings(audit.get("findings", []))
+    audit["match_count"] = sum(1 for f in audit["findings"] if f.get("status") == "match")
+    audit["drifted_count"] = sum(1 for f in audit["findings"] if f.get("status") == "drifted")
+    audit["missing_or_mixed_count"] = sum(1 for f in audit["findings"] if f.get("status") == "missing_or_mixed")
 
     return {
         "source_structure": source_structure,
