@@ -237,6 +237,10 @@ Your task: compare the SOURCE structure against the SUBJECT structure, field by 
 2. DRIFTED (amber) — the element is present in both, but the SUBJECT version has diverged from the SOURCE in a way that changes its meaning, scope, or requirement.
 3. MISSING_OR_MIXED (red) — either the element from SOURCE is entirely absent from SUBJECT (missing), or the SUBJECT contains content that does not correspond to anything in SOURCE and appears to have been blended in from an unrelated context (mixed).
 
+EXHAUSTIVENESS REQUIREMENT: You must generate one finding for EVERY individual field present in either SOURCE or SUBJECT tactics, objectives, goal and strategy — not just the ones that seem most significant. If SOURCE tactics has a "worker.site" field, that field must have its own finding entry, even if the same underlying difference is also reflected elsewhere. Do not summarise multiple fields into fewer findings than the number of fields that actually exist. Every field the user could see in the raw structure must be traceable to exactly one finding.
+
+QUOTING REQUIREMENT: source_excerpt and subject_excerpt must be an exact, character-for-character quote taken directly from the SOURCE and SUBJECT structures provided to you — copy the text exactly as it appears, including the same labels, spacing and punctuation. Do not paraphrase, reword, or summarise the excerpt text, even slightly. If a field is a single line such as "worker.site: Northstar Central", the excerpt must be exactly that string, not a rephrased description of it.
+
 For every finding, state clearly which of the three categories it belongs to, quote the specific SOURCE and SUBJECT text being compared (briefly, not the full document), and give one concise recommendation for resolving it if it is DRIFTED or MISSING_OR_MIXED.
 
 Return ONLY valid JSON. No markdown. No backticks.
