@@ -647,6 +647,22 @@ def index():
     })
 
 
+@app.route("/policy-audit-demo", methods=["GET"])
+def policy_audit_demo():
+    """
+    Serves the standalone Policy Audit System demo page. Internal use only —
+    not part of the public CGOSTI Transformer. Reads the HTML file directly
+    from the same directory as this app, so no template engine is needed.
+    """
+    try:
+        demo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy_audit_demo.html")
+        with open(demo_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except FileNotFoundError:
+        return jsonify({"error": "Demo page file not found on server."}), 404
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "CGOSTI MCP Server"})

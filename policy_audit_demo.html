@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGOSTI Policy Audit System — Demo</title>
+<style>
+  :root {
+    --navy: #0a0a2e; --navy2: #0d0d2e; --gold: #e8a838; --cyan: #00b4d8;
+    --green: #10b981; --amber: #f4a261; --red: #e63946;
+    --dark: #14141f; --mid: #6b7a99; --light: #f5f7fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #0b0b10;
+    font-family: 'Courier New', monospace; color: #ddd;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 20px 32px; border-bottom: 1px solid rgba(232,168,56,0.25);
+    background: var(--navy);
+  }
+  .cube { width: 36px; height: 36px; flex-shrink: 0; }
+  .header-title { font-size: 16px; font-weight: 900; color: var(--gold); letter-spacing: 0.08em; }
+  .header-sub { font-size: 10px; color: var(--mid); letter-spacing: 0.1em; margin-top: 2px; }
+  .badge-demo {
+    margin-left: auto; font-size: 10px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(0,180,216,0.4); padding: 6px 12px; border-radius: 6px;
+    letter-spacing: 0.1em;
+  }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 48px 24px 100px; }
+
+  .tagline {
+    font-size: 13px; color: #c77dff; font-weight: 700; line-height: 1.6;
+    margin-bottom: 32px; max-width: 720px;
+  }
+
+  .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .grid-two { grid-template-columns: 1fr; } }
+
+  .doc-panel {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 20px;
+  }
+  .doc-panel.source { border-color: rgba(0,180,216,0.3); }
+  .doc-panel.subject { border-color: rgba(232,168,56,0.3); }
+  .doc-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.12em; margin-bottom: 4px;
+  }
+  .doc-panel.source .doc-label { color: var(--cyan); }
+  .doc-panel.subject .doc-label { color: var(--gold); }
+  .doc-sub { font-size: 10px; color: var(--mid); margin-bottom: 12px; }
+  textarea {
+    width: 100%; min-height: 220px; background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+    color: #eee; font-family: 'Courier New', monospace; font-size: 12px;
+    padding: 12px; resize: vertical; outline: none; line-height: 1.6;
+  }
+  textarea:focus { border-color: rgba(199,125,255,0.5); }
+  .upload-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .upload-btn {
+    font-size: 10px; padding: 6px 12px; background: transparent;
+    border: 1px solid rgba(255,255,255,0.2); color: #aaa; border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .upload-btn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .filename { font-size: 10px; color: var(--mid); }
+
+  .action-row { display: flex; gap: 10px; justify-content: center; margin: 32px 0; flex-wrap: wrap; }
+  .btn {
+    padding: 12px 28px; border-radius: 8px; font-weight: 700; font-size: 12px;
+    letter-spacing: 0.08em; cursor: pointer; font-family: inherit; border: none;
+    transition: transform 0.15s, opacity 0.15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .btn-transform { background: linear-gradient(135deg,#9b5de5,#00b4d8); color: #fff; }
+  .btn-audit { background: linear-gradient(135deg,#e8a838,#f4a261); color: #1a1a2e; }
+  .btn-report { background: linear-gradient(135deg,#10b981,#00b4d8); color: #fff; }
+
+  .status-line {
+    text-align: center; font-size: 11px; color: var(--mid); margin-bottom: 20px; min-height: 16px;
+  }
+  #errorBox {
+    display: none; background: rgba(230,57,70,0.1); border: 1px solid rgba(230,57,70,0.4);
+    border-radius: 8px; padding: 14px 18px; margin: 0 0 20px; font-size: 11px; color: #ffb3b8;
+    white-space: pre-wrap; word-break: break-word; font-family: 'Courier New', monospace; line-height: 1.6;
+  }
+
+  #resultsArea { display: none; }
+  .summary-box {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 20px; margin-bottom: 20px;
+  }
+  .summary-title { font-size: 11px; font-weight: 700; color: var(--gold); letter-spacing: 0.1em; margin-bottom: 10px; }
+  .summary-text { font-size: 13px; line-height: 1.7; color: #eee; }
+  .counts-row { display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+  .count-pill {
+    display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+    border-radius: 8px; font-size: 12px; font-weight: 700;
+  }
+  .count-pill.match { background: rgba(16,185,129,0.12); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
+  .count-pill.drifted { background: rgba(244,162,97,0.12); color: var(--amber); border: 1px solid rgba(244,162,97,0.35); }
+  .count-pill.missing { background: rgba(230,57,70,0.12); color: var(--red); border: 1px solid rgba(230,57,70,0.35); }
+
+  .finding-card {
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 10px;
+    border-left: 4px solid;
+  }
+  .finding-card.match { background: rgba(16,185,129,0.06); border-color: var(--green); }
+  .finding-card.drifted { background: rgba(244,162,97,0.06); border-color: var(--amber); }
+  .finding-card.missing_or_mixed { background: rgba(230,57,70,0.06); border-color: var(--red); }
+  .finding-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .finding-layer { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: #aaa; }
+  .finding-status { font-size: 10px; font-weight: 900; letter-spacing: 0.08em; }
+  .finding-status.match { color: var(--green); }
+  .finding-status.drifted { color: var(--amber); }
+  .finding-status.missing_or_mixed { color: var(--red); }
+  .excerpt-row { font-size: 11px; color: #ccc; margin: 4px 0; line-height: 1.6; }
+  .excerpt-label { color: var(--mid); font-weight: 700; }
+  .recommendation { font-size: 11px; color: var(--cyan); margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); }
+
+  #reportMeta {
+    display: none; background: rgba(232,168,56,0.06); border: 1px solid rgba(232,168,56,0.25);
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; font-size: 11px; color: #ddd; line-height: 1.8;
+  }
+
+  .export-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+  .export-btn {
+    padding: 6px 12px; background: transparent; border: 1px solid rgba(87,204,153,0.3);
+    color: #57cc99; border-radius: 6px; font-size: 10px; cursor: pointer; font-family: inherit;
+  }
+  .export-btn:hover { background: rgba(87,204,153,0.08); border-color: rgba(87,204,153,0.5); }
+
+  footer { text-align: center; padding: 24px; font-size: 9px; color: #666; letter-spacing: 0.1em; }
+
+  /* Structure display panels (post-Transform) */
+  .structure-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .structure-grid { grid-template-columns: 1fr; } }
+  .structure-panel {
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 16px; font-size: 11px; line-height: 1.7;
+  }
+  .structure-panel.source { border-color: rgba(0,180,216,0.25); }
+  .structure-panel.subject { border-color: rgba(232,168,56,0.25); }
+  .structure-panel-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.1em; margin-bottom: 10px;
+  }
+  .structure-panel.source .structure-panel-title { color: var(--cyan); }
+  .structure-panel.subject .structure-panel-title { color: var(--gold); }
+  .struct-layer-label { font-size: 10px; font-weight: 700; color: #888; margin: 12px 0 4px; letter-spacing: 0.06em; }
+  .struct-line {
+    padding: 4px 8px; border-radius: 4px; margin-bottom: 3px; border-left: 3px solid transparent;
+    color: #ccc; word-break: break-word;
+  }
+  .struct-line.hl-match { background: rgba(16,185,129,0.14); border-left-color: var(--green); color: #d5ffe9; }
+  .struct-line.hl-drifted { background: rgba(244,162,97,0.14); border-left-color: var(--amber); color: #ffe6cc; }
+  .struct-line.hl-missing { background: rgba(230,57,70,0.14); border-left-color: var(--red); color: #ffd9dc; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="cube" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="50,4 90,25 50,46 10,25" fill="#e8a838"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="#c9932e"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="#f6c15e"/>
+    <polygon points="50,4 90,25 50,46 10,25" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+  </svg>
+  <div>
+    <div class="header-title">CGOSTI POLICY AUDIT SYSTEM</div>
+    <div class="header-sub">MIGHTY UNITS LTD · INTERNAL DEMO — NOT PART OF PUBLIC TRANSFORMER</div>
+  </div>
+  <div class="badge-demo">DEMO BUILD</div>
+</header>
+
+<main>
+  <div class="tagline">Compare a Source document (the policy baseline) against a Subject document (the document under audit) — every element classified as Match, Drifted, or Missing/Mixed.</div>
+
+  <div class="grid-two">
+    <div class="doc-panel source">
+      <div class="doc-label">SOURCE DOCUMENT</div>
+      <div class="doc-sub">The canonical policy baseline — the source of truth</div>
+      <textarea id="sourceText" placeholder="Paste or type the baseline policy document here..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('sourceFile').click()">↑ UPLOAD</button>
+        <input type="file" id="sourceFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'sourceText')">
+        <span class="filename" id="sourceFilename"></span>
+      </div>
+    </div>
+    <div class="doc-panel subject">
+      <div class="doc-label">SUBJECT DOCUMENT</div>
+      <div class="doc-sub">The document being audited against the source</div>
+      <textarea id="subjectText" placeholder="Paste or type the document under audit here..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('subjectFile').click()">↑ UPLOAD</button>
+        <input type="file" id="subjectFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'subjectText')">
+        <span class="filename" id="subjectFilename"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-row">
+    <button class="btn btn-transform" id="transformBtn" onclick="runTransform()">TRANSFORM</button>
+    <button class="btn btn-audit" id="auditBtn" onclick="runAudit()" disabled>AUDIT</button>
+    <button class="btn btn-report" id="reportBtn" onclick="generateReport()" disabled>GENERATE AUDIT REPORT</button>
+  </div>
+
+  <div class="status-line" id="statusLine"></div>
+  <div id="errorBox"></div>
+
+  <div class="structure-grid" id="structureGrid" style="display:none">
+    <div class="structure-panel source">
+      <div class="structure-panel-title">SOURCE — CGOSTI STRUCTURE</div>
+      <div id="sourceStructureBody"></div>
+    </div>
+    <div class="structure-panel subject">
+      <div class="structure-panel-title">SUBJECT — CGOSTI STRUCTURE</div>
+      <div id="subjectStructureBody"></div>
+    </div>
+  </div>
+
+  <div id="resultsArea">
+    <div id="reportMeta"></div>
+    <div class="summary-box">
+      <div class="summary-title">AUDIT SUMMARY</div>
+      <div class="summary-text" id="summaryText"></div>
+      <div class="counts-row" id="countsRow"></div>
+    </div>
+    <div id="findingsList"></div>
+    <div class="export-row">
+      <button class="export-btn" onclick="exportAs('copy')">📋 COPY</button>
+      <button class="export-btn" onclick="exportAs('pdf')">↓ PDF</button>
+      <button class="export-btn" onclick="exportAs('docx')">↓ DOCX</button>
+      <button class="export-btn" onclick="exportAs('json')">↓ JSON</button>
+      <button class="export-btn" onclick="exportAs('md')">↓ MD</button>
+    </div>
+  </div>
+</main>
+
+<footer>CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026 · POWERED BY CLAUDE (ANTHROPIC) · DEMO BUILD FOR INTERNAL USE</footer>
+
+<script>
+  const API_BASE = "https://mcp.mightyunits.com";
+  let lastAuditResult = null;
+
+  function handleFileUpload(input, targetId) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById(targetId.replace('Text','Filename')).textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById(targetId).value = e.target.result; };
+    reader.readAsText(file);
+  }
+
+  function setStatus(msg) {
+    document.getElementById('statusLine').textContent = msg;
+  }
+
+  async function runTransform() {
+    const source = document.getElementById('sourceText').value.trim();
+    const subject = document.getElementById('subjectText').value.trim();
+    if (!source || !subject) {
+      setStatus('⚠ Please provide both a Source and Subject document before transforming.');
+      return;
+    }
+    const btn = document.getElementById('transformBtn');
+    btn.disabled = true;
+    setStatus('Transforming both documents into CGOSTI structure... (calling ' + API_BASE + '/audit-compare)');
+    hideErrorBox();
+
+    try {
+      const res = await fetch(API_BASE + '/audit-compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, subject })
+      });
+
+      if (!res.ok) {
+        let bodyText = '';
+        try { bodyText = await res.text(); } catch (e2) {}
+        showErrorBox('HTTP ' + res.status + ' ' + res.statusText + ' from ' + API_BASE + '/audit-compare\n\nResponse body:\n' + bodyText);
+        btn.disabled = false;
+        return;
+      }
+
+      const data = await res.json();
+      if (data.error) {
+        showErrorBox('Server returned an error:\n' + data.error);
+        btn.disabled = false;
+        return;
+      }
+
+      lastAuditResult = data;
+      renderStructurePanels(data.source_structure, data.subject_structure);
+      document.getElementById('structureGrid').style.display = 'grid';
+      setStatus('✅ Transform complete. Both structures displayed below — click Audit to compare.');
+      document.getElementById('auditBtn').disabled = false;
+    } catch (e) {
+      // Show the REAL error — name, message and (if present) a network-level hint —
+      // directly on the page, so no DevTools access is needed to see it.
+      let hint = '';
+      if (e instanceof TypeError) {
+        hint = '\n\nThis is usually either: (1) a CORS block, (2) the server is unreachable at this address, or (3) mixed http/https content blocking the request.';
+      }
+      showErrorBox('JavaScript error while calling ' + API_BASE + '/audit-compare:\n\n' +
+        'Name: ' + e.name + '\n' +
+        'Message: ' + e.message + hint);
+      setStatus('❌ Request failed — see error details below.');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function showErrorBox(text) {
+    var box = document.getElementById('errorBox');
+    box.textContent = text;
+    box.style.display = 'block';
+  }
+  function hideErrorBox() {
+    document.getElementById('errorBox').style.display = 'none';
+  }
+
+  function structFieldToLines(prefix, value) {
+    // Turns a CGOSTI field (string, array, or object) into an array of {key, text} lines
+    var lines = [];
+    if (Array.isArray(value)) {
+      value.forEach(function(v, i) { lines.push({ key: prefix + '_' + i, text: String(v) }); });
+    } else if (typeof value === 'object' && value !== null) {
+      Object.keys(value).forEach(function(k) { lines.push({ key: prefix + '_' + k, text: k + ': ' + JSON.stringify(value[k]) }); });
+    } else if (value) {
+      lines.push({ key: prefix, text: String(value) });
+    }
+    return lines;
+  }
+
+  function renderStructurePanels(sourceStruct, subjectStruct) {
+    var layers = [
+      { key: 'goal', label: 'GOAL' },
+      { key: 'objectives', label: 'OBJECTIVES' },
+      { key: 'strategy', label: 'STRATEGY' },
+      { key: 'tactics', label: 'TACTICS' }
+    ];
+    function buildPanel(struct) {
+      var html = '';
+      layers.forEach(function(l) {
+        html += '<div class="struct-layer-label">' + l.label + '</div>';
+        var lines = structFieldToLines(l.key, struct[l.key]);
+        lines.forEach(function(line) {
+          html += '<div class="struct-line" data-linekey="' + line.key + '" id="line_' + PANEL_SIDE + '_' + line.key + '">' + escapeHtml(line.text) + '</div>';
+        });
+      });
+      return html;
+    }
+    PANEL_SIDE = 'src';
+    document.getElementById('sourceStructureBody').innerHTML = buildPanel(sourceStruct || {});
+    PANEL_SIDE = 'subj';
+    document.getElementById('subjectStructureBody').innerHTML = buildPanel(subjectStruct || {});
+  }
+  var PANEL_SIDE = 'src';
+
+  function escapeHtml(s) {
+    var d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+  }
+
+  function highlightStructurePanels(findings) {
+    // Reset any previous highlighting
+    document.querySelectorAll('.struct-line').forEach(function(el) {
+      el.classList.remove('hl-match', 'hl-drifted', 'hl-missing');
+    });
+    var cls = { match: 'hl-match', drifted: 'hl-drifted', missing_or_mixed: 'hl-missing' };
+    (findings || []).forEach(function(f) {
+      var hlClass = cls[f.status];
+      if (!hlClass) return;
+      // Match by substring — find any structure line whose text is contained in, or contains, the excerpt
+      highlightBySubstring('sourceStructureBody', f.source_excerpt, hlClass);
+      highlightBySubstring('subjectStructureBody', f.subject_excerpt, hlClass);
+    });
+  }
+
+  function highlightBySubstring(containerId, excerpt, hlClass) {
+    if (!excerpt) return;
+    var excerptNorm = excerpt.toLowerCase().slice(0, 40);
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    container.querySelectorAll('.struct-line').forEach(function(el) {
+      var lineText = el.textContent.toLowerCase();
+      if (lineText.includes(excerptNorm) || excerptNorm.includes(lineText.slice(0, 40))) {
+        el.classList.add(hlClass);
+      }
+    });
+  }
+
+  function runAudit() {
+    if (!lastAuditResult) { setStatus('⚠ Run Transform first.'); return; }
+    setStatus('Rendering audit findings...');
+    renderResults(lastAuditResult);
+    highlightStructurePanels((lastAuditResult.audit || {}).findings);
+    document.getElementById('resultsArea').style.display = 'block';
+    document.getElementById('reportBtn').disabled = false;
+    setStatus('✅ Audit complete. Matches, drift and gaps highlighted on both structures above.');
+  }
+
+  function renderResults(data) {
+    const audit = data.audit || {};
+    document.getElementById('summaryText').textContent = audit.summary || 'No summary available.';
+
+    const counts = document.getElementById('countsRow');
+    counts.innerHTML =
+      `<div class="count-pill match">🟢 ${audit.match_count || 0} Match</div>` +
+      `<div class="count-pill drifted">🟡 ${audit.drifted_count || 0} Drifted</div>` +
+      `<div class="count-pill missing">🔴 ${audit.missing_or_mixed_count || 0} Missing / Mixed</div>`;
+
+    const list = document.getElementById('findingsList');
+    const icons = { match: '🟢', drifted: '🟡', missing_or_mixed: '🔴' };
+    list.innerHTML = (audit.findings || []).map(f => `
+      <div class="finding-card ${f.status}">
+        <div class="finding-header">
+          <span>${icons[f.status] || '•'}</span>
+          <span class="finding-layer">[${(f.layer||'').toUpperCase()}]</span>
+          <span class="finding-status ${f.status}">${(f.status||'').replace(/_/g,' ').toUpperCase()}</span>
+        </div>
+        <div class="excerpt-row"><span class="excerpt-label">Source:</span> ${f.source_excerpt || '—'}</div>
+        <div class="excerpt-row"><span class="excerpt-label">Subject:</span> ${f.subject_excerpt || '—'}</div>
+        ${f.recommendation ? `<div class="recommendation">↳ ${f.recommendation}</div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  function generateReport() {
+    if (!lastAuditResult) return;
+    const now = new Date();
+    const meta = document.getElementById('reportMeta');
+    meta.style.display = 'block';
+    meta.innerHTML =
+      `<strong>AUDIT REPORT</strong><br>` +
+      `Date: ${now.toLocaleDateString('en-GB')} &nbsp;·&nbsp; Time: ${now.toLocaleTimeString('en-GB')}<br>` +
+      `Author: Mighty Units Ltd — CGOSTI Policy Audit System<br>` +
+      `Generated: ${lastAuditResult.generated_at || now.toISOString()}`;
+    setStatus('✅ Audit report generated — ready to export.');
+  }
+
+  function exportAs(format) {
+    if (!lastAuditResult) { setStatus('⚠ Generate the audit report first.'); return; }
+    const audit = lastAuditResult.audit || {};
+    const text = `CGOSTI POLICY AUDIT REPORT\nMighty Units Ltd\n\nSUMMARY\n${audit.summary}\n\n` +
+      (audit.findings || []).map(f => `[${f.layer}] ${f.status}\nSource: ${f.source_excerpt}\nSubject: ${f.subject_excerpt}\nRecommendation: ${f.recommendation || 'N/A'}\n`).join('\n');
+
+    if (format === 'copy') {
+      navigator.clipboard.writeText(text);
+      setStatus('✅ Copied to clipboard.');
+      return;
+    }
+    if (format === 'json') {
+      downloadBlob(JSON.stringify(lastAuditResult, null, 2), 'audit-report.json', 'application/json');
+      return;
+    }
+    if (format === 'md') {
+      downloadBlob(text, 'audit-report.md', 'text/markdown');
+      return;
+    }
+    setStatus('⚠ ' + format.toUpperCase() + ' export requires the full Transformer export engine — use Copy or JSON for this demo build.');
+  }
+
+  function downloadBlob(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+</script>
+
+</body>
+</html>
