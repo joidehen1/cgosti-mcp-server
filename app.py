@@ -15,9 +15,11 @@ Deployed independently from the CGOSTI Transformer app.
 
 import os
 import json
+import hashlib
 import requests
 import anthropic
 from concurrent.futures import ThreadPoolExecutor
+from cryptography.fernet import Fernet
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -27,6 +29,18 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False,
 
 CGOSTI_API = "https://cgosti.mightyunits.com"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+# Encryption key for the in-memory structure cache. In production this
+# should be set as a fixed environment variable (CACHE_ENCRYPTION_KEY) so
+# it stays the same across restarts. If not set, a fresh key is generated
+# on startup — meaning the cache still encrypts correctly, but a restart
+# would make old-format entries unreadable (harmless, since the cache is
+# already wiped on restart anyway).
+_CACHE_KEY = os.environ.get("CACHE_ENCRYPTION_KEY")
+if _CACHE_KEY:
+    _fernet = Fernet(_CACHE_KEY.encode())
+else:
+    _fernet = Fernet(Fernet.generate_key())
 
 SYSTEM_PROMPT = """You are a CGOSTI Architect for Mighty Units Ltd. CGOSTI is a universal framework for comprehension and innovation, originally derived from The Almighty Board Game by Osayuki Joseph Idehen.
 
@@ -530,15 +544,31 @@ def call_health(subject):
         return f"CGOSTI Health error: {str(e)}"
 
 
+# Structure cache — keyed by a hash of the exact document text. The first
+# time a document is structured, the result is cached. Every subsequent
+# call with that same exact text retrieves the cached structure instead of
+# asking Claude to generate it again. This guarantees identical text always
+# produces identical structure — fixing the vocabulary/label variance found
+# when testing the same document against itself (temperature=0 reduces but
+# does not eliminate this variance for open-ended generation tasks).
+_STRUCTURE_CACHE = {}
+
+
 def _structure_one(text):
     """
     Structure a single document by calling Claude directly — no detour through
-    the Transformer. This is the fix for the timeout bug: previously this
-    function called cgosti.mightyunits.com/transform, which itself called
-    Claude, adding an unnecessary extra hop and roughly doubling latency
-    for no benefit, since this MCP server already has its own Anthropic
-    API key and client.
+    the Transformer. Checks the structure cache first; only calls Claude if
+    this exact text hasn't been structured before. Cached entries are
+    encrypted at rest using Fernet (AES-128-CBC + HMAC), since document
+    text can contain real, sensitive information.
     """
+    cache_key = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+    if cache_key in _STRUCTURE_CACHE:
+        encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+        decrypted_json = _fernet.decrypt(encrypted_bytes).decode("utf-8")
+        return json.loads(decrypted_json)
+
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not configured on the MCP server.")
 
@@ -549,7 +579,11 @@ def _structure_one(text):
         messages=[{"role": "user", "content": f'Transform this into CGOSTI:\n\n"{text}"'}]
     )
     raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
+    result = json.loads(raw)
+
+    encrypted_bytes = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+    _STRUCTURE_CACHE[cache_key] = encrypted_bytes
+    return result
 
 
 def run_audit_compare(source, subject):
