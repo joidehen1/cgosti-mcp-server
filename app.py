@@ -8,7 +8,7 @@ as three tools for Claude and other AI systems:
 
   cgosti_transform  — maps any subject into the full C-G-O-S-T-I framework
   cgosti_connect    — maps IIC/IOC/EIC/EOC connection quadrants
-  cgosti_health     — returns Connection Health status.
+  cgosti_health     — returns Connection Health status
 
 Deployed independently from the CGOSTI Transformer app.
 """
