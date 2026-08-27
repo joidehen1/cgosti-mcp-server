@@ -228,6 +228,19 @@ Keys: goal (string), objectives (array), strategy (string), tactics (array), inn
 Do NOT generate innovation_ai in this call. It will be requested separately."""
 
 
+SYSTEM_PROMPT_NORTHSTAR_SUBJECT = """You are the CGOSTI Northstar Compliance Structurer for Mighty Units Ltd.
+
+You are given a SOURCE document (a company compliance policy — the rules that define what "compliant" means) and a SUBJECT document (a specific worker's compliance record).
+
+Your task: using the SOURCE policy as your instructions, generate ONLY the Goal and Objectives for the SUBJECT — describing the worker's record in CGOSTI structure, in the language and requirements the SOURCE policy defines. Do NOT generate Strategy, Tactics, or Innovation.
+
+The Goal should describe what a verified compliance outcome for this specific worker looks like.
+
+The Objectives should be a list of the worker's actual compliance components, each one clearly derived from a requirement named in the SOURCE policy — for example, if the SOURCE policy requires "Right to Work" evidence, the SUBJECT's Objectives should include something like "Right to Work Module (status: ..., expiry: ...)", using the SUBJECT's actual real values, not invented ones.
+
+Return ONLY valid JSON. No markdown. No backticks.
+Keys: goal (string), objectives (array of strings)."""
+
 SYSTEM_PROMPT_AUDIT_COMPARE = """You are the CGOSTI Policy Audit Comparator for Mighty Units Ltd.
 
 You are given two CGOSTI structures — a SOURCE (the canonical policy baseline) and a SUBJECT (the document under audit). Both have already been transformed into CGOSTI structure (Goal, Objectives, Strategy, Tactics).
@@ -747,6 +760,23 @@ def compliance_check_demo():
         return jsonify({"error": "Compliance check page file not found on server."}), 404
 
 
+@app.route("/northstar-audit-demo", methods=["GET"])
+def northstar_audit_page():
+    """
+    Serves the third, separate demo page — Source policy + Subject worker
+    record, with Claude generating the Subject's Goal/Objectives (cached
+    for determinism) and the deterministic engine supplying the actual
+    color verdicts. Does not replace policy-audit-demo or compliance-check.
+    """
+    try:
+        demo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "northstar_audit.html")
+        with open(demo_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except FileNotFoundError:
+        return jsonify({"error": "Northstar audit page file not found on server."}), 404
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "CGOSTI MCP Server"})
@@ -911,6 +941,89 @@ def evaluate_worker_compliance(record, today=None):
         "evaluation_date": today.isoformat(),
         "findings": findings,
     }
+
+
+@app.route("/northstar-transform", methods=["POST", "OPTIONS"])
+def northstar_transform_http():
+    """
+    Generates Goal + Objectives for a Subject worker record, using the
+    Source policy document as instructions — Claude call, cached by
+    content hash for determinism on repeat runs.
+
+    Also runs the deterministic evaluate_worker_compliance() engine in
+    parallel on the raw JSON, so the AUDIT step (a separate call) can
+    apply real, verified colors onto the AI-generated Objectives lines —
+    not colors judged by the LLM itself.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"status": "ok"})
+        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
+
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    source = (body.get("source") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    if not source or not subject:
+        return jsonify({"error": "Both 'source' and 'subject' are required."}), 400
+
+    try:
+        cache_key = hashlib.sha256((source.strip() + "||" + subject.strip()).encode("utf-8")).hexdigest()
+
+        if cache_key in _STRUCTURE_CACHE:
+            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+            structured = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
+        else:
+            if not ANTHROPIC_API_KEY:
+                return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=1024, temperature=0,
+                system=[{"type": "text", "text": SYSTEM_PROMPT_NORTHSTAR_SUBJECT, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content":
+                    f"SOURCE (policy):\n{source}\n\nSUBJECT (worker record):\n{subject}"}]
+            )
+            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            structured = json.loads(raw)
+            encrypted = _fernet.encrypt(json.dumps(structured).encode("utf-8"))
+            _STRUCTURE_CACHE[cache_key] = encrypted
+
+        return jsonify({"goal": structured.get("goal", ""), "objectives": structured.get("objectives", [])})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/northstar-audit", methods=["POST", "OPTIONS"])
+def northstar_audit_http():
+    """
+    Takes the raw Subject JSON record (not the AI-generated text) and runs
+    the deterministic evaluate_worker_compliance() engine — the actual,
+    verified color truth. The frontend matches these results onto the
+    displayed Objectives lines by field name.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"status": "ok"})
+        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
+
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    try:
+        result = evaluate_worker_compliance(body)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/evaluate-compliance", methods=["POST", "OPTIONS"])
