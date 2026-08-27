@@ -16,6 +16,7 @@ Deployed independently from the CGOSTI Transformer app.
 import os
 import json
 import hashlib
+from datetime import date
 import requests
 import anthropic
 from concurrent.futures import ThreadPoolExecutor
@@ -729,6 +730,23 @@ def policy_audit_demo():
         return jsonify({"error": "Demo page file not found on server."}), 404
 
 
+@app.route("/compliance-check", methods=["GET"])
+def compliance_check_demo():
+    """
+    Serves the standalone Northstar Facilities Ltd Compliance Check demo
+    page — a SEPARATE page from policy-audit-demo, not a replacement.
+    Calls /evaluate-compliance, which is deterministic date-arithmetic
+    logic, not LLM structural comparison.
+    """
+    try:
+        demo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compliance_check.html")
+        with open(demo_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except FileNotFoundError:
+        return jsonify({"error": "Compliance check page file not found on server."}), 404
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "CGOSTI MCP Server"})
@@ -803,6 +821,122 @@ def mcp_handler():
 
     else:
         return err(-32601, f"Method not found: {method}")
+
+
+def evaluate_worker_compliance(record, today=None):
+    """
+    Deterministic Northstar Facilities Ltd compliance evaluation — pure
+    date arithmetic and rule checks, NOT LLM judgement. Implements Rules
+    1-10 of the Field Worker Compliance Standard. Rule 11 (Data-Quality
+    Exception) is intentionally NOT yet implemented — pending confirmation
+    from the client on exact contradiction-detection scope.
+
+    Returns one of four states: compliant, non_compliant, expiring_soon,
+    assignment_specific_non_compliant — plus the specific findings that
+    led to that verdict, so the result is fully auditable.
+    """
+    if today is None:
+        today = date.today()
+
+    req = record.get("requirements", {})
+    worker = record.get("worker", {})
+    findings = []
+
+    mandatory_fields = [
+        "right_to_work", "identity_verification", "health_and_safety_training",
+        "role_certification", "site_induction"
+    ]
+
+    state_priority = {"compliant": 0, "expiring_soon": 1, "assignment_specific_non_compliant": 2, "non_compliant": 3}
+    worst_state = "compliant"
+
+    def upgrade(new_state):
+        nonlocal worst_state
+        if state_priority[new_state] > state_priority[worst_state]:
+            worst_state = new_state
+
+    for field in mandatory_fields:
+        item = req.get(field, {})
+        status = item.get("status")
+        expiry_str = item.get("expiry_date")
+
+        if status is None or status == "missing":
+            findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
+                              "detail": f"{field.replace('_', ' ').title()} evidence is missing."})
+            upgrade("non_compliant")
+            continue
+
+        if expiry_str:
+            try:
+                expiry = date.fromisoformat(expiry_str)
+                days_left = (expiry - today).days
+            except ValueError:
+                findings.append({"field": field, "status": status, "verdict": "data_quality_exception",
+                                  "detail": f"{field.replace('_', ' ').title()} has an unparseable expiry date: {expiry_str}"})
+                continue
+
+            if days_left < 0:
+                findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "non_compliant",
+                                  "detail": f"{field.replace('_', ' ').title()} expired {abs(days_left)} day(s) ago ({expiry_str})."})
+                upgrade("non_compliant")
+            elif days_left <= 30:
+                findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "expiring_soon",
+                                  "detail": f"{field.replace('_', ' ').title()} expires in {days_left} day(s) ({expiry_str}) — within the 30-day action window."})
+                upgrade("expiring_soon")
+            else:
+                findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "compliant",
+                                  "detail": f"{field.replace('_', ' ').title()} is valid, {days_left} day(s) remaining."})
+        else:
+            findings.append({"field": field, "status": status, "verdict": "compliant",
+                              "detail": f"{field.replace('_', ' ').title()} status: {status}."})
+
+    dbs = req.get("dbs_check", {})
+    dbs_status = dbs.get("status")
+    if worker.get("sensitive_site"):
+        if dbs_status not in ("valid", "complete"):
+            findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "assignment_specific_non_compliant",
+                              "detail": "DBS Check is mandatory at a Sensitive Site and is missing or not valid."})
+            upgrade("assignment_specific_non_compliant")
+        else:
+            findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "compliant",
+                              "detail": "DBS Check is valid, as required for this Sensitive Site assignment."})
+    else:
+        findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "compliant",
+                          "detail": "DBS Check not required — worker is not assigned to a Sensitive Site."})
+
+    return {
+        "worker_name": worker.get("name"),
+        "poc_case_id": record.get("poc_case_id"),
+        "verdict": worst_state,
+        "evaluation_date": today.isoformat(),
+        "findings": findings,
+    }
+
+
+@app.route("/evaluate-compliance", methods=["POST", "OPTIONS"])
+def evaluate_compliance_http():
+    """
+    Deterministic Northstar Facilities Ltd compliance check. Takes a single
+    worker record (JSON matching the poc_case format) and returns one of
+    four states, computed via real date arithmetic — not LLM judgement.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"status": "ok"})
+        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
+
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    try:
+        result = evaluate_worker_compliance(body)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/audit-compare", methods=["POST", "OPTIONS"])

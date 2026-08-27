@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGOSTI Compliance Check — Northstar Facilities Ltd</title>
+<style>
+  :root {
+    --navy: #0a0a2e; --gold: #e8a838; --cyan: #00b4d8;
+    --green: #10b981; --amber: #f4a261; --red: #e63946; --purple: #9b5de5;
+    --mid: #6b7a99;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #0b0b10;
+    font-family: 'Courier New', monospace; color: #ddd;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 20px 32px; border-bottom: 1px solid rgba(232,168,56,0.25);
+    background: var(--navy);
+  }
+  .cube { width: 36px; height: 36px; flex-shrink: 0; }
+  .header-title { font-size: 16px; font-weight: 900; color: var(--gold); letter-spacing: 0.08em; }
+  .header-sub { font-size: 10px; color: var(--mid); letter-spacing: 0.1em; margin-top: 2px; }
+  .badge-demo {
+    margin-left: auto; font-size: 10px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(0,180,216,0.4); padding: 6px 12px; border-radius: 6px;
+    letter-spacing: 0.1em;
+  }
+
+  main { max-width: 900px; margin: 0 auto; padding: 48px 24px 100px; }
+
+  .tagline {
+    font-size: 13px; color: var(--purple); font-weight: 700; line-height: 1.6;
+    margin-bottom: 32px;
+  }
+
+  .panel {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 20px; margin-bottom: 20px;
+  }
+  .panel-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.12em; margin-bottom: 4px; color: var(--cyan);
+  }
+  .panel-sub { font-size: 10px; color: var(--mid); margin-bottom: 12px; }
+
+  textarea {
+    width: 100%; min-height: 240px; background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+    color: #eee; font-family: 'Courier New', monospace; font-size: 12px;
+    padding: 12px; resize: vertical; outline: none; line-height: 1.6;
+  }
+  textarea:focus { border-color: rgba(199,125,255,0.5); }
+
+  .upload-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .upload-btn {
+    font-size: 10px; padding: 6px 12px; background: transparent;
+    border: 1px solid rgba(255,255,255,0.2); color: #aaa; border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .upload-btn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .filename { font-size: 10px; color: var(--mid); }
+
+  .sample-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .sample-btn {
+    font-size: 10px; padding: 5px 10px; background: rgba(155,93,229,0.1);
+    border: 1px solid rgba(155,93,229,0.3); color: var(--purple); border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .sample-btn:hover { background: rgba(155,93,229,0.2); }
+
+  .action-row { display: flex; justify-content: center; margin: 24px 0; }
+  .btn {
+    padding: 14px 40px; border-radius: 8px; font-weight: 700; font-size: 13px;
+    letter-spacing: 0.08em; cursor: pointer; font-family: inherit; border: none;
+    background: linear-gradient(135deg,#9b5de5,#00b4d8); color: #fff;
+    transition: transform 0.15s, opacity 0.15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .status-line { text-align: center; font-size: 11px; color: var(--mid); margin-bottom: 20px; min-height: 16px; }
+  #errorBox {
+    display: none; background: rgba(230,57,70,0.1); border: 1px solid rgba(230,57,70,0.4);
+    border-radius: 8px; padding: 14px 18px; margin: 0 0 20px; font-size: 11px; color: #ffb3b8;
+    white-space: pre-wrap; word-break: break-word; line-height: 1.6;
+  }
+
+  #resultArea { display: none; }
+
+  .verdict-banner {
+    text-align: center; padding: 24px; border-radius: 10px; margin-bottom: 20px;
+    font-size: 18px; font-weight: 900; letter-spacing: 0.05em;
+  }
+  .verdict-banner.compliant { background: rgba(16,185,129,0.15); border: 2px solid var(--green); color: var(--green); }
+  .verdict-banner.expiring_soon { background: rgba(244,162,97,0.15); border: 2px solid var(--amber); color: var(--amber); }
+  .verdict-banner.non_compliant { background: rgba(230,57,70,0.15); border: 2px solid var(--red); color: var(--red); }
+  .verdict-banner.assignment_specific_non_compliant { background: rgba(230,57,70,0.15); border: 2px solid var(--red); color: var(--red); }
+
+  .worker-meta { text-align: center; font-size: 11px; color: var(--mid); margin-bottom: 20px; }
+
+  .finding-card {
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; border-left: 4px solid;
+    display: flex; align-items: flex-start; gap: 12px;
+  }
+  .finding-card.compliant { background: rgba(16,185,129,0.06); border-color: var(--green); }
+  .finding-card.expiring_soon { background: rgba(244,162,97,0.06); border-color: var(--amber); }
+  .finding-card.non_compliant { background: rgba(230,57,70,0.06); border-color: var(--red); }
+  .finding-card.assignment_specific_non_compliant { background: rgba(230,57,70,0.06); border-color: var(--red); }
+  .finding-card.missing { background: rgba(230,57,70,0.06); border-color: var(--red); }
+  .finding-icon { font-size: 16px; flex-shrink: 0; }
+  .finding-field { font-size: 10px; font-weight: 700; color: #aaa; letter-spacing: 0.06em; margin-bottom: 3px; }
+  .finding-detail { font-size: 12px; color: #eee; line-height: 1.5; }
+
+  .pending-note {
+    background: rgba(232,168,56,0.06); border: 1px solid rgba(232,168,56,0.25);
+    border-radius: 8px; padding: 14px 18px; margin-top: 20px; font-size: 11px; color: #ddd; line-height: 1.7;
+  }
+
+  footer { text-align: center; padding: 24px; font-size: 9px; color: #666; letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="cube" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="50,4 90,25 50,46 10,25" fill="#e8a838"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="#c9932e"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="#f6c15e"/>
+    <polygon points="50,4 90,25 50,46 10,25" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+  </svg>
+  <div>
+    <div class="header-title">CGOSTI COMPLIANCE CHECK</div>
+    <div class="header-sub">NORTHSTAR FACILITIES LTD · FIELD WORKER COMPLIANCE STANDARD</div>
+  </div>
+  <div class="badge-demo">DETERMINISTIC — NO LLM JUDGEMENT</div>
+</header>
+
+<main>
+  <div class="tagline">Paste or upload a worker compliance record. The verdict is computed using real date arithmetic against today's date — Compliant, Non-Compliant, Currently Valid but Action Required, or Assignment-Specific Non-Compliant.</div>
+
+  <div class="panel">
+    <div class="panel-label">WORKER RECORD</div>
+    <div class="panel-sub">Paste the worker's JSON compliance record, or upload a file</div>
+    <textarea id="workerInput" placeholder='{"poc_case_id": "...", "worker": {...}, "requirements": {...}}'></textarea>
+    <div class="upload-row">
+      <button class="upload-btn" onclick="document.getElementById('workerFile').click()">↑ UPLOAD</button>
+      <input type="file" id="workerFile" style="display:none" accept=".json" onchange="handleFileUpload(this)">
+      <span class="filename" id="workerFilename"></span>
+    </div>
+    <div class="sample-row">
+      <span style="font-size:10px;color:#666;align-self:center;">Quick test:</span>
+      <button class="sample-btn" onclick="loadSample('sarah')">Sarah (Compliant)</button>
+      <button class="sample-btn" onclick="loadSample('james')">James (Expiring Soon)</button>
+      <button class="sample-btn" onclick="loadSample('maria')">Maria (Assignment-Specific)</button>
+      <button class="sample-btn" onclick="loadSample('amina')">Amina (Missing Evidence)</button>
+      <button class="sample-btn" onclick="loadSample('michael')">Michael (Expired)</button>
+    </div>
+  </div>
+
+  <div class="action-row">
+    <button class="btn" id="evaluateBtn" onclick="runEvaluation()">EVALUATE COMPLIANCE</button>
+  </div>
+
+  <div class="status-line" id="statusLine"></div>
+  <div id="errorBox"></div>
+
+  <div id="resultArea">
+    <div class="verdict-banner" id="verdictBanner"></div>
+    <div class="worker-meta" id="workerMeta"></div>
+    <div id="findingsList"></div>
+    <div class="pending-note">
+      ⚠ Data-Quality Exception (Rule 11 — contradictory records, e.g. status "valid" with an already-past expiry date) is not yet implemented, pending confirmation from Trustera on exact scope. This evaluation covers Rules 1–10 only.
+    </div>
+  </div>
+</main>
+
+<footer>CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026 · POWERED BY CLAUDE (ANTHROPIC) · DETERMINISTIC EVALUATION — NO AI JUDGEMENT ON DATES OR RULES</footer>
+
+<script>
+  const API_BASE = "https://mcp.mightyunits.com";
+
+  const SAMPLES = {
+    sarah: {"poc_case_id":"sarah_cole","worker":{"name":"Sarah Cole","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"complete"},"dbs_check":{"status":"not_required"}}},
+    james: {"poc_case_id":"james_patel","worker":{"name":"James Patel","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2026-09-03"},"site_induction":{"status":"complete"},"dbs_check":{"status":"not_required"}}},
+    maria: {"poc_case_id":"maria_evans","worker":{"name":"Maria Evans","role":"Field Operative","site":"Northstar Sensitive Site A","sensitive_site":true},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"complete"},"dbs_check":{"status":"missing"}}},
+    amina: {"poc_case_id":"amina_yusuf","worker":{"name":"Amina Yusuf","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"missing"},"dbs_check":{"status":"not_required"}}},
+    michael: {"poc_case_id":"michael_reed","worker":{"name":"Michael Reed","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2026-08-05"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"complete"},"dbs_check":{"status":"not_required"}}}
+  };
+
+  function loadSample(key) {
+    document.getElementById('workerInput').value = JSON.stringify(SAMPLES[key], null, 2);
+    document.getElementById('workerFilename').textContent = '';
+  }
+
+  function handleFileUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById('workerFilename').textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById('workerInput').value = e.target.result; };
+    reader.readAsText(file);
+  }
+
+  function setStatus(msg) { document.getElementById('statusLine').textContent = msg; }
+  function showErrorBox(text) {
+    var box = document.getElementById('errorBox');
+    box.textContent = text;
+    box.style.display = 'block';
+  }
+  function hideErrorBox() { document.getElementById('errorBox').style.display = 'none'; }
+
+  const VERDICT_LABELS = {
+    compliant: '🟢 COMPLIANT',
+    expiring_soon: '🟡 CURRENTLY VALID — ACTION REQUIRED',
+    non_compliant: '🔴 NON-COMPLIANT',
+    assignment_specific_non_compliant: '🔴 ASSIGNMENT-SPECIFIC NON-COMPLIANT'
+  };
+  const FINDING_ICONS = { compliant: '🟢', expiring_soon: '🟡', non_compliant: '🔴', assignment_specific_non_compliant: '🔴', missing: '🔴' };
+
+  async function runEvaluation() {
+    const raw = document.getElementById('workerInput').value.trim();
+    if (!raw) { setStatus('⚠ Please paste or upload a worker record first.'); return; }
+
+    let record;
+    try {
+      record = JSON.parse(raw);
+    } catch (e) {
+      showErrorBox('Invalid JSON: ' + e.message);
+      return;
+    }
+
+    hideErrorBox();
+    const btn = document.getElementById('evaluateBtn');
+    btn.disabled = true;
+    setStatus('Evaluating against Northstar Facilities Ltd Compliance Standard...');
+
+    try {
+      const res = await fetch(API_BASE + '/evaluate-compliance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record)
+      });
+
+      if (!res.ok) {
+        const bodyText = await res.text();
+        showErrorBox('HTTP ' + res.status + ' from server:\n' + bodyText);
+        btn.disabled = false;
+        return;
+      }
+
+      const result = await res.json();
+      if (result.error) {
+        showErrorBox('Server error: ' + result.error);
+        btn.disabled = false;
+        return;
+      }
+
+      renderResult(result);
+      setStatus('✅ Evaluation complete.');
+    } catch (e) {
+      showErrorBox('JavaScript error: ' + e.name + ': ' + e.message);
+      setStatus('❌ Request failed.');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderResult(result) {
+    const banner = document.getElementById('verdictBanner');
+    banner.className = 'verdict-banner ' + result.verdict;
+    banner.textContent = VERDICT_LABELS[result.verdict] || result.verdict.toUpperCase();
+
+    document.getElementById('workerMeta').textContent =
+      `${result.worker_name} (${result.poc_case_id}) — evaluated against today's date: ${result.evaluation_date}`;
+
+    const list = document.getElementById('findingsList');
+    list.innerHTML = (result.findings || []).map(f => `
+      <div class="finding-card ${f.verdict}">
+        <span class="finding-icon">${FINDING_ICONS[f.verdict] || '•'}</span>
+        <div>
+          <div class="finding-field">${f.field.replace(/_/g,' ').toUpperCase()}</div>
+          <div class="finding-detail">${f.detail}</div>
+        </div>
+      </div>
+    `).join('');
+
+    document.getElementById('resultArea').style.display = 'block';
+  }
+</script>
+
+</body>
+</html>
