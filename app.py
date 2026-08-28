@@ -856,14 +856,24 @@ def mcp_handler():
 def evaluate_worker_compliance(record, today=None):
     """
     Deterministic Northstar Facilities Ltd compliance evaluation — pure
-    date arithmetic and rule checks, NOT LLM judgement. Implements Rules
-    1-10 of the Field Worker Compliance Standard. Rule 11 (Data-Quality
-    Exception) is intentionally NOT yet implemented — pending confirmation
-    from the client on exact contradiction-detection scope.
+    date arithmetic and rule checks, NOT LLM judgement. Implements the
+    full Rules 1-11 of the Field Worker Compliance Standard, per
+    Emmanuel Amadi's confirmed corrections (27/08/2026):
 
-    Returns one of four states: compliant, non_compliant, expiring_soon,
-    assignment_specific_non_compliant — plus the specific findings that
-    led to that verdict, so the result is fully auditable.
+      - Worker Assignment / Site Context is now its own explicit finding,
+        since DBS and Site Induction both depend on it.
+      - Rule 11 (Data-Quality Exception) is implemented: when a field's
+        status explicitly says "valid"/"complete" but its expiry date has
+        already passed, that is a genuine internal contradiction — it is
+        NOT silently resolved into non_compliant (Rule 8). It is flagged
+        for human review instead.
+
+    Returns one of five states: compliant, non_compliant, expiring_soon,
+    assignment_specific_non_compliant, data_quality_exception — plus the
+    specific findings (with Reason / Required Action per finding) and the
+    Overall Status / Triggering Requirement(s), matching the two-section
+    report format (Worker Compliance Evaluation / Evaluation Controls
+    Applied) agreed with Emmanuel.
     """
     if today is None:
         today = date.today()
@@ -877,13 +887,22 @@ def evaluate_worker_compliance(record, today=None):
         "role_certification", "site_induction"
     ]
 
-    state_priority = {"compliant": 0, "expiring_soon": 1, "assignment_specific_non_compliant": 2, "non_compliant": 3}
+    state_priority = {"compliant": 0, "expiring_soon": 1, "assignment_specific_non_compliant": 2,
+                       "non_compliant": 3, "data_quality_exception": 4}
     worst_state = "compliant"
 
     def upgrade(new_state):
         nonlocal worst_state
         if state_priority[new_state] > state_priority[worst_state]:
             worst_state = new_state
+
+    # Worker Assignment / Site Context — explicit per Emmanuel's correction,
+    # since DBS and Site Induction both depend on this context.
+    findings.append({
+        "field": "worker_assignment_site_context", "status": worker.get("site"), "verdict": "compliant",
+        "detail": f"Worker assigned to {worker.get('site')} — {'Sensitive Site' if worker.get('sensitive_site') else 'Standard Site'}.",
+        "required_action": None
+    })
 
     for field in mandatory_fields:
         item = req.get(field, {})
@@ -892,7 +911,8 @@ def evaluate_worker_compliance(record, today=None):
 
         if status is None or status == "missing":
             findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
-                              "detail": f"{field.replace('_', ' ').title()} evidence is missing."})
+                              "detail": f"{field.replace('_', ' ').title()} evidence is missing.",
+                              "required_action": f"Obtain and submit {field.replace('_', ' ')} evidence."})
             upgrade("non_compliant")
             continue
 
@@ -902,45 +922,77 @@ def evaluate_worker_compliance(record, today=None):
                 days_left = (expiry - today).days
             except ValueError:
                 findings.append({"field": field, "status": status, "verdict": "data_quality_exception",
-                                  "detail": f"{field.replace('_', ' ').title()} has an unparseable expiry date: {expiry_str}"})
+                                  "detail": f"{field.replace('_', ' ').title()} has an unparseable expiry date: {expiry_str}",
+                                  "required_action": "Flag for human review — expiry date could not be parsed."})
+                upgrade("data_quality_exception")
                 continue
 
-            if days_left < 0:
+            # RULE 11: status explicitly says "valid"/"complete" but the date fact
+            # says it already expired — a genuine internal contradiction, not an
+            # ordinary expiry (Rule 8). Must be flagged for review, not auto-resolved.
+            if days_left < 0 and status in ("valid", "complete"):
+                findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "data_quality_exception",
+                                  "detail": f"{field.replace('_', ' ').title()} is marked '{status}' but its expiry date ({expiry_str}) has already passed {abs(days_left)} day(s) ago — contradictory record.",
+                                  "required_action": "Flag for human review — do not treat as automatically compliant or non-compliant."})
+                upgrade("data_quality_exception")
+            elif days_left < 0:
                 findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "non_compliant",
-                                  "detail": f"{field.replace('_', ' ').title()} expired {abs(days_left)} day(s) ago ({expiry_str})."})
+                                  "detail": f"{field.replace('_', ' ').title()} expired {abs(days_left)} day(s) ago ({expiry_str}).",
+                                  "required_action": f"Renew {field.replace('_', ' ')} immediately — overdue."})
                 upgrade("non_compliant")
             elif days_left <= 30:
                 findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "expiring_soon",
-                                  "detail": f"{field.replace('_', ' ').title()} expires in {days_left} day(s) ({expiry_str}) — within the 30-day action window."})
+                                  "detail": f"{field.replace('_', ' ').title()} expires in {days_left} day(s) ({expiry_str}) — within the 30-day action window.",
+                                  "required_action": f"Renew {field.replace('_', ' ')} before {expiry_str}."})
                 upgrade("expiring_soon")
             else:
                 findings.append({"field": field, "status": status, "expiry_date": expiry_str, "verdict": "compliant",
-                                  "detail": f"{field.replace('_', ' ').title()} is valid, {days_left} day(s) remaining."})
+                                  "detail": f"{field.replace('_', ' ').title()} is valid, {days_left} day(s) remaining.",
+                                  "required_action": None})
         else:
             findings.append({"field": field, "status": status, "verdict": "compliant",
-                              "detail": f"{field.replace('_', ' ').title()} status: {status}."})
+                              "detail": f"{field.replace('_', ' ').title()} status: {status}.",
+                              "required_action": None})
 
     dbs = req.get("dbs_check", {})
     dbs_status = dbs.get("status")
     if worker.get("sensitive_site"):
         if dbs_status not in ("valid", "complete"):
             findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "assignment_specific_non_compliant",
-                              "detail": "DBS Check is mandatory at a Sensitive Site and is missing or not valid."})
+                              "detail": "DBS Check is mandatory at a Sensitive Site and is missing or not valid.",
+                              "required_action": "Obtain a valid DBS Check before deployment to a Sensitive Site."})
             upgrade("assignment_specific_non_compliant")
         else:
             findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "compliant",
-                              "detail": "DBS Check is valid, as required for this Sensitive Site assignment."})
+                              "detail": "DBS Check is valid, as required for this Sensitive Site assignment.",
+                              "required_action": None})
     else:
         findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "compliant",
-                          "detail": "DBS Check not required — worker is not assigned to a Sensitive Site."})
+                          "detail": "DBS Check not required — worker is not assigned to a Sensitive Site.",
+                          "required_action": None})
+
+    triggering = [f["field"] for f in findings if f["verdict"] == worst_state and f["field"] != "worker_assignment_site_context"]
+
+    # Evaluation Controls Applied — Section B of the two-section report format.
+    controls_applied = [
+        "Expiry monitoring applied (30-day window, Rule 9)",
+        "Data-quality validation applied (status/date contradiction check, Rule 11)",
+        "Assignment-specific rules applied (Rule 10)" if worker.get("sensitive_site") else "Assignment-specific rules not applicable (Standard Site)",
+        "Sensitive-site rule evaluated" if worker.get("sensitive_site") else "Sensitive-site rule not applicable",
+        "Overall compliance status calculated",
+    ]
 
     return {
         "worker_name": worker.get("name"),
         "poc_case_id": record.get("poc_case_id"),
-        "verdict": worst_state,
+        "overall_status": worst_state,
+        "verdict": worst_state,  # backward-compat key for compliance_check.html and northstar_audit.html
+        "triggering_requirements": triggering,
+        "controls_applied": controls_applied,
         "evaluation_date": today.isoformat(),
         "findings": findings,
     }
+
 
 
 @app.route("/northstar-transform", methods=["POST", "OPTIONS"])
