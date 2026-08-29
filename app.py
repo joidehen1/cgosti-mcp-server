@@ -230,13 +230,13 @@ Do NOT generate innovation_ai in this call. It will be requested separately."""
 
 SYSTEM_PROMPT_NORTHSTAR_SUBJECT = """You are the CGOSTI Northstar Compliance Structurer for Mighty Units Ltd.
 
-You are given a SOURCE document (a company compliance policy — the rules that define what "compliant" means) and a SUBJECT document (a specific worker's compliance record).
+You are given a SOURCE document (a company compliance policy), a SUBJECT document (a specific worker's compliance record), and a set of VERIFIED FINDINGS — the actual, deterministically-computed result for every field, already calculated by real date arithmetic. The VERIFIED FINDINGS are ground truth. They are not open to interpretation or re-derivation.
 
-Your task: using the SOURCE policy as your instructions, generate ONLY the Goal and Objectives for the SUBJECT — describing the worker's record in CGOSTI structure, in the language and requirements the SOURCE policy defines. Do NOT generate Strategy, Tactics, or Innovation.
+Your task: generate ONLY the Goal and Objectives for the SUBJECT, using the SOURCE policy's language and structure. Do NOT generate Strategy, Tactics, or Innovation.
 
-The Goal should describe what a verified compliance outcome for this specific worker looks like.
+CRITICAL RULE: for every Objective you write, you MUST state the classification and reasoning exactly as given in the matching VERIFIED FINDING for that field — never independently judge whether something is compliant, expiring, non-compliant, assignment-specific non-compliant, or a data-quality exception. If a VERIFIED FINDING says a field is "data_quality_exception", your Objective text must say so clearly and explain why (the contradiction), even if the raw status field elsewhere says "valid". Do not describe a field as "compliant" or "no action required" if its VERIFIED FINDING says otherwise. You are writing natural-language descriptions of an already-decided result — you are not making the decision yourself.
 
-The Objectives should be a list of the worker's actual compliance components, each one clearly derived from a requirement named in the SOURCE policy — for example, if the SOURCE policy requires "Right to Work" evidence, the SUBJECT's Objectives should include something like "Right to Work Module (status: ..., expiry: ...)", using the SUBJECT's actual real values, not invented ones.
+The Goal should describe what a verified compliance outcome for this specific worker looks like, and should reflect the actual overall result from the VERIFIED FINDINGS (e.g., if the overall result is expiring_soon, the Goal should not claim the worker is "cleared for deployment without condition").
 
 Return ONLY valid JSON. No markdown. No backticks.
 Keys: goal (string), objectives (array of strings)."""
@@ -998,14 +998,18 @@ def evaluate_worker_compliance(record, today=None):
 @app.route("/northstar-transform", methods=["POST", "OPTIONS"])
 def northstar_transform_http():
     """
-    Generates Goal + Objectives for a Subject worker record, using the
-    Source policy document as instructions — Claude call, cached by
-    content hash for determinism on repeat runs.
+    FIXED (28/08/2026, per Emmanuel's meeting feedback): previously this
+    route asked Claude to independently judge each field's compliance
+    status when generating the Objectives text — producing wrong,
+    contradictory descriptions (e.g. an expired/contradictory field
+    described as "compliant, no action required") that disagreed with
+    the real, deterministic verdict.
 
-    Also runs the deterministic evaluate_worker_compliance() engine in
-    parallel on the raw JSON, so the AUDIT step (a separate call) can
-    apply real, verified colors onto the AI-generated Objectives lines —
-    not colors judged by the LLM itself.
+    Now: evaluate_worker_compliance() runs FIRST, on the raw Subject
+    JSON. Its real, verified findings are passed to Claude as ground
+    truth. Claude's only job is to phrase each Objective in natural
+    language — it must state the classification exactly as given,
+    never re-derive or override it.
     """
     if request.method == "OPTIONS":
         resp = jsonify({"status": "ok"})
@@ -1025,7 +1029,22 @@ def northstar_transform_http():
         return jsonify({"error": "Both 'source' and 'subject' are required."}), 400
 
     try:
-        cache_key = hashlib.sha256((source.strip() + "||" + subject.strip()).encode("utf-8")).hexdigest()
+        # Step 1: run the REAL, deterministic evaluation first. This is
+        # ground truth — it does not depend on Claude in any way.
+        try:
+            subject_record = json.loads(subject)
+        except json.JSONDecodeError:
+            return jsonify({"error": "Subject must be valid JSON for deterministic evaluation to run."}), 400
+
+        verified_result = evaluate_worker_compliance(subject_record)
+
+        # Step 2: generate the natural-language Goal/Objectives, grounded
+        # in the verified findings above — cached by a key that includes
+        # the verified result, so a change in the real verdict correctly
+        # invalidates any stale cached description.
+        cache_key = hashlib.sha256(
+            (source.strip() + "||" + subject.strip() + "||" + json.dumps(verified_result, sort_keys=True)).encode("utf-8")
+        ).hexdigest()
 
         if cache_key in _STRUCTURE_CACHE:
             encrypted_bytes = _STRUCTURE_CACHE[cache_key]
@@ -1038,14 +1057,19 @@ def northstar_transform_http():
                 model="claude-sonnet-4-6", max_tokens=1024, temperature=0,
                 system=[{"type": "text", "text": SYSTEM_PROMPT_NORTHSTAR_SUBJECT, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content":
-                    f"SOURCE (policy):\n{source}\n\nSUBJECT (worker record):\n{subject}"}]
+                    f"SOURCE (policy):\n{source}\n\nSUBJECT (worker record):\n{subject}\n\n"
+                    f"VERIFIED FINDINGS (ground truth — do not override):\n{json.dumps(verified_result, indent=2)}"}]
             )
             raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
             structured = json.loads(raw)
             encrypted = _fernet.encrypt(json.dumps(structured).encode("utf-8"))
             _STRUCTURE_CACHE[cache_key] = encrypted
 
-        return jsonify({"goal": structured.get("goal", ""), "objectives": structured.get("objectives", [])})
+        return jsonify({
+            "goal": structured.get("goal", ""),
+            "objectives": structured.get("objectives", []),
+            "verified_result": verified_result  # exposed so the frontend can cross-check, not just trust the text
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
