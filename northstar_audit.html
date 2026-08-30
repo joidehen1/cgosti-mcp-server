@@ -82,6 +82,7 @@
   .verdict-line.compliant { color: var(--green); }
   .verdict-line.expiring_soon { color: var(--amber); }
   .verdict-line.non_compliant, .verdict-line.assignment_specific_non_compliant { color: var(--red); }
+  .verdict-line.data_quality_exception { color: #bbb; }
   .counts-row { display: flex; gap: 16px; flex-wrap: wrap; }
   .count-pill { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 700; }
   .count-pill.g { background: rgba(16,185,129,0.12); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
@@ -273,7 +274,8 @@
 
       const verdictLabels = {
         compliant: '🟢 COMPLIANT', expiring_soon: '🟡 CURRENTLY VALID — ACTION REQUIRED',
-        non_compliant: '🔴 NON-COMPLIANT', assignment_specific_non_compliant: '🔴 ASSIGNMENT-SPECIFIC NON-COMPLIANT'
+        non_compliant: '🔴 NON-COMPLIANT', assignment_specific_non_compliant: '🔴 ASSIGNMENT-SPECIFIC NON-COMPLIANT',
+        data_quality_exception: '⚫ DATA-QUALITY EXCEPTION'
       };
       const vLine = document.getElementById('verdictLine');
       vLine.className = 'verdict-line ' + result.verdict;
