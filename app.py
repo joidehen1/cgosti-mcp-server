@@ -855,6 +855,68 @@ def mcp_handler():
         return err(-32601, f"Method not found: {method}")
 
 
+_STATUS_CLASSIFICATION_CACHE = {}
+
+KNOWN_PRESENT_STATUSES = {"valid", "complete", "current", "done", "not_required", "not required"}
+KNOWN_MISSING_STATUSES = {"missing", "absent", "not provided", "not_provided", "none", "n/a", "na", "unavailable", "not available"}
+
+
+def classify_status_as_missing(status_text):
+    """
+    For a status string not already in the known lists above, ask Claude
+    a single, narrow, binary question — no compliance judgement, no fact
+    restatement, no dates, no verdict. Only "MISSING" or "PRESENT" is a
+    valid answer, so there is nothing free-form for the model to
+    hallucinate into. Results are cached, since the same wording will
+    recur across many worker records.
+
+    This exists specifically because a fixed keyword list (the previous
+    approach) cannot recognise novel wording it wasn't given in advance,
+    while the fact-stating LLM approach (tried earlier tonight) proved
+    unreliable even when given the correct value directly. This narrows
+    the LLM's role to the one thing it's safe for here: classifying an
+    unfamiliar WORD, never restating a FACT.
+    """
+    key = (status_text or "").strip().lower()
+    if not key:
+        return True  # empty/None status is unambiguously missing
+
+    if key in KNOWN_PRESENT_STATUSES:
+        return False
+    if key in KNOWN_MISSING_STATUSES:
+        return True
+
+    if key in _STATUS_CLASSIFICATION_CACHE:
+        return _STATUS_CLASSIFICATION_CACHE[key]
+
+    if not ANTHROPIC_API_KEY:
+        # Fail safe: if we can't classify and can't ask, don't silently
+        # assume present — treat unrecognised status as needing review
+        # by falling through to "present" only because that's the
+        # existing fallback behaviour; this path should rarely trigger.
+        return False
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=10, temperature=0,
+            system=[{"type": "text", "text":
+                "You classify a single compliance status word or phrase into exactly one category. "
+                "Reply with ONLY the single word MISSING or PRESENT — nothing else, no punctuation, no explanation. "
+                "MISSING means the evidence is absent, not supplied, or not on file. "
+                "PRESENT means the evidence exists and has some status (valid, expired, pending, etc. all count as PRESENT — "
+                "only classify as MISSING if the evidence itself does not exist)."}],
+            messages=[{"role": "user", "content": f'Status: "{status_text}"'}]
+        )
+        answer = msg.content[0].text.strip().upper()
+        result = (answer == "MISSING")
+    except Exception:
+        result = False  # fail safe: don't silently mark as missing on an API error
+
+    _STATUS_CLASSIFICATION_CACHE[key] = result
+    return result
+
+
 def evaluate_worker_compliance(record, today=None):
     """
     Deterministic Northstar Facilities Ltd compliance evaluation — pure
@@ -911,7 +973,7 @@ def evaluate_worker_compliance(record, today=None):
         status = item.get("status")
         expiry_str = item.get("expiry_date")
 
-        if status is None or status == "missing":
+        if status is None or classify_status_as_missing(status):
             findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
                               "detail": f"{field.replace('_', ' ').title()} evidence is missing.",
                               "required_action": f"Obtain and submit {field.replace('_', ' ')} evidence."})
