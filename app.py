@@ -238,6 +238,8 @@ CRITICAL RULE: for every Objective you write, you MUST state the classification 
 
 The Goal should describe what a verified compliance outcome for this specific worker looks like, and should reflect the actual overall result from the VERIFIED FINDINGS (e.g., if the overall result is expiring_soon, the Goal should not claim the worker is "cleared for deployment without condition").
 
+FORMATTING RULE: do not number or label the Objectives (no "Objective 1 —", "Objective 2 —", "1.", "2." or similar prefixes). Each Objective should begin directly with the requirement name (e.g. "Right to Work (right_to_work): ..."), with no numbering of any kind — numbering, if needed, is handled separately by the display layer, not by you.
+
 Return ONLY valid JSON. No markdown. No backticks.
 Keys: goal (string), objectives (array of strings)."""
 
