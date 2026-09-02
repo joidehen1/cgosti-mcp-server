@@ -785,6 +785,25 @@ def northstar_audit_page():
         return jsonify({"error": "Northstar audit page file not found on server."}), 404
 
 
+@app.route("/northstar-audit-demo2", methods=["GET"])
+def northstar_audit_page_v2():
+    """
+    Fourth demo page (03/09/2026) — adds the Drift category, per
+    Emmanuel's proposal: a Silver-coded, parallel signal for values that
+    are not the exact words the policy defines for a field, even when
+    correctly interpreted for compliance purposes. Drift never affects
+    the verdict — it is surfaced separately in Goal/Objectives.
+    Does NOT replace northstar-audit-demo.
+    """
+    try:
+        demo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "northstar_audit2.html")
+        with open(demo_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except FileNotFoundError:
+        return jsonify({"error": "Northstar audit v2 page file not found on server."}), 404
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "CGOSTI MCP Server"})
@@ -921,6 +940,39 @@ def classify_status_as_missing(status_text):
     return result
 
 
+STRICT_ALLOWED_VALUES = {
+    "site_induction": {"complete", "missing"},
+    "identity_verification": {"complete", "missing"},
+    "right_to_work": {"valid", "expired", "missing"},
+    "health_and_safety_training": {"valid", "expired", "missing"},
+    "role_certification": {"valid", "expired", "missing"},
+    "dbs_check": {"valid", "expired", "missing", "not_required"},
+}
+
+
+def check_drift(field, status):
+    """
+    DRIFT (added 03/09/2026, per Emmanuel's exact framing): the Northstar
+    policy uses a small, fixed set of exact words per field. Drift means
+    the raw value is NOT one of those exact words — even if it can be
+    correctly interpreted as present/missing for compliance purposes.
+
+    Example: Site Induction's only policy-defined values are "complete"
+    or "missing". A record using "incomplete" or "not provided" is
+    correctly resolved to "missing" for the VERDICT, but the value
+    itself is still Drift — it is not the exact wording the policy uses,
+    and that gap is worth surfacing on its own, separate from compliance.
+
+    Drift is a parallel signal, silver-coded. It never changes the
+    verdict — it is reported alongside it as a data-quality notification.
+    """
+    if not isinstance(status, str):
+        return True
+    key = status.strip().lower()
+    allowed = STRICT_ALLOWED_VALUES.get(field, set())
+    return key not in allowed
+
+
 def evaluate_worker_compliance(record, today=None):
     """
     Deterministic Northstar Facilities Ltd compliance evaluation — pure
@@ -973,11 +1025,19 @@ def evaluate_worker_compliance(record, today=None):
     })
 
     NOT_REQUIRED_EQUIVALENTS = {"not_required", "not required", "n/a", "na", "not applicable", "exempt", "optional"}
+    drift_flags = []
 
     for field in mandatory_fields:
         item = req.get(field, {})
         status = item.get("status")
         expiry_str = item.get("expiry_date")
+
+        if check_drift(field, status):
+            drift_flags.append({
+                "field": field,
+                "raw_value": status,
+                "detail": f"{field.replace('_', ' ').title()} uses the value '{status}', which is not one of the exact words the policy defines for this field. This does not change the compliance verdict, but is flagged as Drift for data-quality awareness."
+            })
 
         # RULE 11 (field-level, added 02/09/2026 per Emmanuel's exact framing:
         # "if Site Induction is explicitly/positively mandatory, any value
@@ -1056,6 +1116,14 @@ def evaluate_worker_compliance(record, today=None):
 
     dbs = req.get("dbs_check", {})
     dbs_status = dbs.get("status")
+
+    if check_drift("dbs_check", dbs_status):
+        drift_flags.append({
+            "field": "dbs_check",
+            "raw_value": dbs_status,
+            "detail": f"DBS Check uses the value '{dbs_status}', which is not one of the exact words the policy defines for this field. This does not change the compliance verdict, but is flagged as Drift for data-quality awareness."
+        })
+
     if worker.get("sensitive_site"):
         if dbs_status not in ("valid", "complete"):
             findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "assignment_specific_non_compliant",
@@ -1089,6 +1157,7 @@ def evaluate_worker_compliance(record, today=None):
         "verdict": worst_state,  # backward-compat key for compliance_check.html and northstar_audit.html
         "triggering_requirements": triggering,
         "controls_applied": controls_applied,
+        "drift_flags": drift_flags,  # NEW — parallel signal, never affects overall_status
         "evaluation_date": today.isoformat(),
         "findings": findings,
     }
