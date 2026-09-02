@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGOSTI Policy Audit System Report</title>
+<style>
+  :root {
+    --navy: #0a0a2e; --gold: #e8a838; --cyan: #00b4d8;
+    --green: #10b981; --amber: #f4a261; --red: #e63946; --purple: #9b5de5;
+    --mid: #6b7a99;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0b0b10; font-family: 'Courier New', monospace; color: #ddd; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 20px 32px;
+    border-bottom: 1px solid rgba(232,168,56,0.25); background: var(--navy);
+  }
+  .cube { width: 36px; height: 36px; flex-shrink: 0; }
+  .header-title { font-size: 16px; font-weight: 900; color: var(--gold); letter-spacing: 0.08em; }
+  .header-sub { font-size: 10px; color: var(--mid); letter-spacing: 0.1em; margin-top: 2px; }
+  .badge-demo {
+    margin-left: auto; font-size: 10px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(0,180,216,0.4); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.1em;
+  }
+  main { max-width: 900px; margin: 0 auto; padding: 48px 24px 100px; }
+  .tagline { font-size: 13px; color: var(--purple); font-weight: 700; line-height: 1.6; margin-bottom: 32px; }
+
+  .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .grid-two { grid-template-columns: 1fr; } }
+  .doc-panel { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 20px; }
+  .doc-panel.source { border-color: rgba(0,180,216,0.3); }
+  .doc-panel.subject { border-color: rgba(232,168,56,0.3); }
+  .doc-label { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; margin-bottom: 4px; }
+  .doc-panel.source .doc-label { color: var(--cyan); }
+  .doc-panel.subject .doc-label { color: var(--gold); }
+  .doc-sub { font-size: 10px; color: var(--mid); margin-bottom: 12px; }
+  textarea {
+    width: 100%; min-height: 200px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; color: #eee; font-family: 'Courier New', monospace; font-size: 12px;
+    padding: 12px; resize: vertical; outline: none; line-height: 1.6;
+  }
+  textarea:focus { border-color: rgba(199,125,255,0.5); }
+  .upload-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .upload-btn {
+    font-size: 10px; padding: 6px 12px; background: transparent; border: 1px solid rgba(255,255,255,0.2);
+    color: #aaa; border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .upload-btn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .filename { font-size: 10px; color: var(--mid); }
+  .sample-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .sample-btn {
+    font-size: 10px; padding: 5px 10px; background: rgba(155,93,229,0.1); border: 1px solid rgba(155,93,229,0.3);
+    color: var(--purple); border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .sample-btn:hover { background: rgba(155,93,229,0.2); }
+
+  .action-row { display: flex; gap: 10px; justify-content: center; margin: 32px 0; flex-wrap: wrap; }
+  .btn {
+    padding: 12px 28px; border-radius: 8px; font-weight: 700; font-size: 12px; letter-spacing: 0.08em;
+    cursor: pointer; font-family: inherit; border: none; transition: transform 0.15s, opacity 0.15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .btn-transform { background: linear-gradient(135deg,#9b5de5,#00b4d8); color: #fff; }
+  .btn-audit { background: linear-gradient(135deg,#e8a838,#f4a261); color: #1a1a2e; }
+
+  .status-line { text-align: center; font-size: 11px; color: var(--mid); margin-bottom: 20px; min-height: 16px; }
+  #errorBox {
+    display: none; background: rgba(230,57,70,0.1); border: 1px solid rgba(230,57,70,0.4); border-radius: 8px;
+    padding: 14px 18px; margin: 0 0 20px; font-size: 11px; color: #ffb3b8; white-space: pre-wrap; line-height: 1.6;
+  }
+
+  #resultArea { display: none; }
+  .goal-box {
+    background: rgba(255,255,255,0.03); border: 2px solid rgba(255,255,255,0.15); border-radius: 10px;
+    padding: 20px; margin-bottom: 20px;
+  }
+  .goal-label { font-size: 11px; font-weight: 700; color: var(--gold); letter-spacing: 0.1em; margin-bottom: 8px; }
+  .goal-text { font-size: 13px; line-height: 1.7; color: #eee; margin-bottom: 16px; }
+  .verdict-line { font-size: 16px; font-weight: 900; margin-bottom: 10px; }
+  .verdict-line.compliant { color: var(--green); }
+  .verdict-line.expiring_soon { color: var(--amber); }
+  .verdict-line.non_compliant, .verdict-line.assignment_specific_non_compliant { color: var(--red); }
+  .verdict-line.data_quality_exception { color: #bbb; }
+  .drift-box {
+    display: none; background: rgba(192,192,192,0.08); border: 1px solid #c0c0c0;
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 20px;
+  }
+  .drift-label { font-size: 11px; font-weight: 700; color: #c0c0c0; letter-spacing: 0.1em; margin-bottom: 8px; }
+  .drift-item { font-size: 12px; color: #ddd; margin-bottom: 6px; padding-left: 14px; border-left: 3px solid #c0c0c0; }
+  .counts-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .count-pill { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+  .count-pill.g { background: rgba(16,185,129,0.12); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
+  .count-pill.a { background: rgba(244,162,97,0.12); color: var(--amber); border: 1px solid rgba(244,162,97,0.35); }
+  .count-pill.r { background: rgba(230,57,70,0.12); color: var(--red); border: 1px solid rgba(230,57,70,0.35); }
+
+  .objectives-label { font-size: 11px; font-weight: 700; color: var(--cyan); letter-spacing: 0.1em; margin: 20px 0 10px; }
+  .obj-line {
+    padding: 10px 14px; border-radius: 6px; margin-bottom: 6px; border-left: 4px solid transparent;
+    font-size: 13px; color: #ddd;
+  }
+  .obj-line.g { background: rgba(16,185,129,0.08); border-color: var(--green); }
+  .obj-line.a { background: rgba(244,162,97,0.08); border-color: var(--amber); }
+  .obj-line.r { background: rgba(230,57,70,0.08); border-color: var(--red); }
+  .obj-line.silver { background: rgba(192,192,192,0.08); border-color: #c0c0c0; }
+
+  .export-row { display: flex; gap: 8px; margin-top: 24px; justify-content: center; }
+  .export-btn {
+    padding: 6px 14px; background: transparent; border: 1px solid rgba(87,204,153,0.3); color: #57cc99;
+    border-radius: 6px; font-size: 10px; cursor: pointer; font-family: inherit;
+  }
+  .export-btn:hover { background: rgba(87,204,153,0.08); }
+
+  footer { text-align: center; padding: 24px; font-size: 9px; color: #666; letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="cube" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="50,4 90,25 50,46 10,25" fill="#e8a838"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="#c9932e"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="#f6c15e"/>
+    <polygon points="50,4 90,25 50,46 10,25" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+  </svg>
+  <div>
+    <div class="header-title">CGOSTI POLICY AUDIT SYSTEM REPORT</div>
+    <div class="header-sub">MIGHTY UNITS LTD · COMPANY NO. 16815780</div>
+  </div>
+  <div class="badge-demo">DEMO BUILD + DRIFT</div>
+</header>
+
+<main>
+  <div class="tagline">A verified compliance status verdict — Compliant, Non-Compliant, Expiring Soon, or Assignment-Specific Non-Compliant — is produced for each Field Operative record.</div>
+
+  <div class="grid-two">
+    <div class="doc-panel source">
+      <div class="doc-label">SOURCE DOCUMENT</div>
+      <div class="doc-sub">The policy — used as instructions to audit the Subject</div>
+      <textarea id="sourceText" placeholder="Paste the Northstar Facilities Ltd policy text..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('sourceFile').click()">↑ UPLOAD</button>
+        <input type="file" id="sourceFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'sourceText')">
+        <span class="filename" id="sourceFilename"></span>
+      </div>
+    </div>
+    <div class="doc-panel subject">
+      <div class="doc-label">SUBJECT DOCUMENT</div>
+      <div class="doc-sub">The worker record being audited</div>
+      <textarea id="subjectText" placeholder="Paste or upload the worker's JSON record..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('subjectFile').click()">↑ UPLOAD</button>
+        <input type="file" id="subjectFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'subjectText')">
+        <span class="filename" id="subjectFilename"></span>
+      </div>
+      <div class="sample-row">
+        <button class="sample-btn" onclick="loadSample('sarah')">Sarah</button>
+        <button class="sample-btn" onclick="loadSample('james')">James</button>
+        <button class="sample-btn" onclick="loadSample('maria')">Maria</button>
+        <button class="sample-btn" onclick="loadSample('amina')">Amina</button>
+        <button class="sample-btn" onclick="loadSample('michael')">Michael</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-row">
+    <button class="btn btn-transform" id="transformBtn" onclick="runTransform()">TRANSFORM</button>
+    <button class="btn btn-audit" id="auditBtn" onclick="runAudit()" disabled>AUDIT</button>
+  </div>
+
+  <div class="status-line" id="statusLine"></div>
+  <div id="errorBox"></div>
+
+  <div id="resultArea">
+    <div class="goal-box">
+      <div class="goal-label">GOAL</div>
+      <div class="goal-text" id="goalText"></div>
+      <div class="verdict-line" id="verdictLine" style="display:none"></div>
+      <div class="counts-row" id="countsRow" style="display:none"></div>
+    </div>
+    <div class="drift-box" id="driftBox">
+      <div class="drift-label">🔘 DRIFT — DATA QUALITY NOTIFICATION (does not affect verdict)</div>
+      <div id="driftList"></div>
+    </div>
+    <div class="objectives-label">OBJECTIVES</div>
+    <div id="objectivesList"></div>
+    <div class="export-row">
+      <button class="export-btn" onclick="exportAs('json')">↓ JSON</button>
+      <button class="export-btn" onclick="exportAs('md')">↓ MD</button>
+    </div>
+  </div>
+</main>
+
+<footer>CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026 · POWERED BY CLAUDE (ANTHROPIC)</footer>
+
+<script>
+  const API_BASE = "https://mcp.mightyunits.com";
+  let lastObjectives = [];
+  let lastGoal = "";
+  let lastAuditResult = null;
+
+  const SAMPLES = {
+    sarah: {"poc_case_id":"sarah_cole","worker":{"name":"Sarah Cole","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"complete"},"dbs_check":{"status":"not_required"}}},
+    james: {"poc_case_id":"james_patel","worker":{"name":"James Patel","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2026-09-03"},"site_induction":{"status":"complete"},"dbs_check":{"status":"not_required"}}},
+    maria: {"poc_case_id":"maria_evans","worker":{"name":"Maria Evans","role":"Field Operative","site":"Northstar Sensitive Site A","sensitive_site":true},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"complete"},"dbs_check":{"status":"missing"}}},
+    amina: {"poc_case_id":"amina_yusuf","worker":{"name":"Amina Yusuf","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2027-02-28"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"missing"},"dbs_check":{"status":"not_required"}}},
+    michael: {"poc_case_id":"michael_reed","worker":{"name":"Michael Reed","role":"Field Operative","site":"Northstar Central","sensitive_site":false},"requirements":{"right_to_work":{"status":"valid","expiry_date":"2027-06-30"},"identity_verification":{"status":"complete"},"health_and_safety_training":{"status":"valid","expiry_date":"2026-08-05"},"role_certification":{"status":"valid","expiry_date":"2027-03-11"},"site_induction":{"status":"complete"},"dbs_check":{"status":"not_required"}}}
+  };
+
+  function loadSample(key) {
+    document.getElementById('subjectText').value = JSON.stringify(SAMPLES[key], null, 2);
+    document.getElementById('subjectFilename').textContent = '';
+  }
+
+  function handleFileUpload(input, targetId) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById(targetId.replace('Text','Filename')).textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById(targetId).value = e.target.result; };
+    reader.readAsText(file);
+  }
+
+  function setStatus(msg) { document.getElementById('statusLine').textContent = msg; }
+  function showErrorBox(text) { var b = document.getElementById('errorBox'); b.textContent = text; b.style.display = 'block'; }
+  function hideErrorBox() { document.getElementById('errorBox').style.display = 'none'; }
+
+  async function runTransform() {
+    const source = document.getElementById('sourceText').value.trim();
+    const subject = document.getElementById('subjectText').value.trim();
+    if (!source || !subject) { setStatus('⚠ Please provide both Source and Subject.'); return; }
+
+    hideErrorBox();
+    const btn = document.getElementById('transformBtn');
+    btn.disabled = true;
+    setStatus('Generating Goal and Objectives from Subject, using Source as instructions...');
+
+    try {
+      const res = await fetch(API_BASE + '/northstar-transform', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, subject })
+      });
+      if (!res.ok) { showErrorBox('HTTP ' + res.status + ': ' + await res.text()); btn.disabled = false; return; }
+      const data = await res.json();
+      if (data.error) { showErrorBox('Error: ' + data.error); btn.disabled = false; return; }
+
+      lastGoal = data.goal;
+      lastObjectives = data.objectives || [];
+
+      document.getElementById('goalText').textContent = lastGoal;
+      document.getElementById('objectivesList').innerHTML = lastObjectives.map(o =>
+        `<div class="obj-line" id="objline_${lastObjectives.indexOf(o)}">${o}</div>`
+      ).join('');
+      document.getElementById('resultArea').style.display = 'block';
+      document.getElementById('auditBtn').disabled = false;
+      setStatus('✅ Transform complete. Click Audit to classify each Objective.');
+    } catch (e) {
+      showErrorBox(e.name + ': ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function runAudit() {
+    const subject = document.getElementById('subjectText').value.trim();
+    let record;
+    try { record = JSON.parse(subject); }
+    catch (e) { showErrorBox('Subject must be valid JSON for Audit to run the compliance check: ' + e.message); return; }
+
+    hideErrorBox();
+    setStatus('Running deterministic compliance check...');
+
+    try {
+      const res = await fetch(API_BASE + '/northstar-audit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record)
+      });
+      const result = await res.json();
+      if (result.error) { showErrorBox('Error: ' + result.error); return; }
+
+      lastAuditResult = result;
+
+      const verdictLabels = {
+        compliant: '🟢 COMPLIANT', expiring_soon: '🟡 CURRENTLY VALID — ACTION REQUIRED',
+        non_compliant: '🔴 NON-COMPLIANT', assignment_specific_non_compliant: '🔴 ASSIGNMENT-SPECIFIC NON-COMPLIANT',
+        data_quality_exception: '⚫ DATA-QUALITY EXCEPTION'
+      };
+      const vLine = document.getElementById('verdictLine');
+      vLine.className = 'verdict-line ' + result.verdict;
+      vLine.textContent = verdictLabels[result.verdict] || result.verdict;
+      vLine.style.display = 'block';
+
+      let g=0, a=0, r=0;
+      (result.findings || []).forEach(f => {
+        if (f.verdict === 'compliant') g++;
+        else if (f.verdict === 'expiring_soon') a++;
+        else r++;
+      });
+      const driftFlags = result.drift_flags || [];
+      const driftCount = driftFlags.length;
+      document.getElementById('countsRow').innerHTML =
+        `<div class="count-pill g">🟢 ${g} Compliant</div><div class="count-pill a">🟡 ${a} Expiring Soon</div><div class="count-pill r">🔴 ${r} Non-Compliant</div><div class="count-pill" style="background:rgba(192,192,192,0.12);color:#c0c0c0;border:1px solid rgba(192,192,192,0.35);">⚪ ${driftCount} Drift</div>`;
+      document.getElementById('countsRow').style.display = 'flex';
+
+      if (driftFlags.length > 0) {
+        document.getElementById('driftList').innerHTML = driftFlags.map(d =>
+          `<div class="drift-item">${d.field.replace(/_/g,' ').toUpperCase()}: "${d.raw_value}" — ${d.detail}</div>`
+        ).join('');
+        document.getElementById('driftBox').style.display = 'block';
+      } else {
+        document.getElementById('driftBox').style.display = 'none';
+      }
+
+      // Match findings onto the AI-generated Objectives lines by field keyword
+      document.querySelectorAll('.obj-line').forEach(el => {
+        const text = el.textContent.toLowerCase();
+        const match = (result.findings || []).find(f => text.includes(f.field.replace(/_/g,' ')) || text.includes(f.field));
+        if (match) {
+          el.classList.add(match.verdict === 'compliant' ? 'g' : match.verdict === 'expiring_soon' ? 'a' : 'r');
+        }
+        // Additionally mark this line silver if it's also flagged as drift
+        const isDrift = driftFlags.find(d => text.includes(d.field.replace(/_/g,' ')) || text.includes(d.field));
+        if (isDrift) {
+          el.classList.add('silver');
+        }
+      });
+
+      setStatus('✅ Audit complete.');
+    } catch (e) {
+      showErrorBox(e.name + ': ' + e.message);
+    }
+  }
+
+  function exportAs(format) {
+    if (!lastAuditResult) { setStatus('⚠ Run Audit first.'); return; }
+    const data = { goal: lastGoal, objectives: lastObjectives, audit: lastAuditResult };
+    if (format === 'json') {
+      downloadBlob(JSON.stringify(data, null, 2), 'compliance-report.json', 'application/json');
+    } else {
+      const text = `# CGOSTI Compliance Report\n\n## Goal\n${lastGoal}\n\n## Verdict\n${lastAuditResult.verdict}\n\n## Objectives\n${lastObjectives.map(o=>'- '+o).join('\n')}\n`;
+      downloadBlob(text, 'compliance-report.md', 'text/markdown');
+    }
+  }
+  function downloadBlob(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+</script>
+
+</body>
+</html>
