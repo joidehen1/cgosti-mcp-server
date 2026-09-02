@@ -863,44 +863,37 @@ def mcp_handler():
 
 _STATUS_CLASSIFICATION_CACHE = {}
 
-KNOWN_PRESENT_STATUSES = {"valid", "complete", "current", "done", "not_required", "not required"}
-KNOWN_MISSING_STATUSES = {"missing", "absent", "not provided", "not_provided", "none", "n/a", "na", "unavailable", "not available"}
+KNOWN_PRESENT_STATUSES = {"valid", "complete", "current", "done", "not_required", "not required", "expired", "pending", "active"}
+KNOWN_MISSING_STATUSES = {"missing", "absent", "not provided", "not_provided", "none", "n/a", "na", "unavailable", "not available", "incomplete", "not complete", "not_complete"}
 
 
 def classify_status_as_missing(status_text):
     """
-    For a status string not already in the known lists above, ask Claude
-    a single, narrow, binary question — no compliance judgement, no fact
-    restatement, no dates, no verdict. Only "MISSING" or "PRESENT" is a
-    valid answer, so there is nothing free-form for the model to
-    hallucinate into. Results are cached, since the same wording will
-    recur across many worker records.
+    Returns one of three states: "missing", "present", or "unknown".
 
-    This exists specifically because a fixed keyword list (the previous
-    approach) cannot recognise novel wording it wasn't given in advance,
-    while the fact-stating LLM approach (tried earlier tonight) proved
-    unreliable even when given the correct value directly. This narrows
-    the LLM's role to the one thing it's safe for here: classifying an
-    unfamiliar WORD, never restating a FACT.
+    FIXED (03/09/2026, per real-world testing where an unrecognised status
+    "incomplete" was incorrectly treated as compliant): previously, any
+    failure to classify (no API key, API error) defaulted to "present",
+    silently passing a worker whose actual status was never confirmed.
+    That is the wrong direction to fail in a compliance system — an
+    unclassifiable status should require human review, never a silent
+    pass. Callers must treat "unknown" as a Data-Quality Exception, not
+    as compliant.
     """
     key = (status_text or "").strip().lower()
     if not key:
-        return True  # empty/None status is unambiguously missing
+        return "missing"  # empty/None status is unambiguously missing
 
     if key in KNOWN_PRESENT_STATUSES:
-        return False
+        return "present"
     if key in KNOWN_MISSING_STATUSES:
-        return True
+        return "missing"
 
     if key in _STATUS_CLASSIFICATION_CACHE:
         return _STATUS_CLASSIFICATION_CACHE[key]
 
     if not ANTHROPIC_API_KEY:
-        # Fail safe: if we can't classify and can't ask, don't silently
-        # assume present — treat unrecognised status as needing review
-        # by falling through to "present" only because that's the
-        # existing fallback behaviour; this path should rarely trigger.
-        return False
+        return "unknown"
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -915,9 +908,14 @@ def classify_status_as_missing(status_text):
             messages=[{"role": "user", "content": f'Status: "{status_text}"'}]
         )
         answer = msg.content[0].text.strip().upper()
-        result = (answer == "MISSING")
+        if answer == "MISSING":
+            result = "missing"
+        elif answer == "PRESENT":
+            result = "present"
+        else:
+            result = "unknown"  # model didn't answer cleanly - don't guess
     except Exception:
-        result = False  # fail safe: don't silently mark as missing on an API error
+        result = "unknown"  # fail safe: API error means we genuinely don't know
 
     _STATUS_CLASSIFICATION_CACHE[key] = result
     return result
@@ -997,11 +995,25 @@ def evaluate_worker_compliance(record, today=None):
             upgrade("data_quality_exception")
             continue
 
-        if status is None or classify_status_as_missing(status):
+        if status is None:
             findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
                               "detail": f"{field.replace('_', ' ').title()} evidence is missing.",
                               "required_action": f"Obtain and submit {field.replace('_', ' ')} evidence."})
             upgrade("non_compliant")
+            continue
+
+        classification = classify_status_as_missing(status)
+        if classification == "missing":
+            findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
+                              "detail": f"{field.replace('_', ' ').title()} evidence is missing.",
+                              "required_action": f"Obtain and submit {field.replace('_', ' ')} evidence."})
+            upgrade("non_compliant")
+            continue
+        if classification == "unknown":
+            findings.append({"field": field, "status": status, "verdict": "data_quality_exception",
+                              "detail": f"{field.replace('_', ' ').title()} has an unrecognised status value ('{status}') that could not be confirmed as present or missing.",
+                              "required_action": "Flag for human review — status wording could not be classified with confidence."})
+            upgrade("data_quality_exception")
             continue
 
         if expiry_str:
