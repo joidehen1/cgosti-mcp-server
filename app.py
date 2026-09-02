@@ -25,7 +25,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False,
+ALLOWED_ORIGINS = [
+    "https://mcp.mightyunits.com",
+    "https://cgosti.mightyunits.com",
+    "https://mightyunits.com",
+    "https://www.mightyunits.com",
+]
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=False,
      methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
 
 CGOSTI_API = "https://cgosti.mightyunits.com"
@@ -968,10 +974,28 @@ def evaluate_worker_compliance(record, today=None):
         "required_action": None
     })
 
+    NOT_REQUIRED_EQUIVALENTS = {"not_required", "not required", "n/a", "na", "not applicable", "exempt", "optional"}
+
     for field in mandatory_fields:
         item = req.get(field, {})
         status = item.get("status")
         expiry_str = item.get("expiry_date")
+
+        # RULE 11 (field-level, added 02/09/2026 per Emmanuel's exact framing:
+        # "if Site Induction is explicitly/positively mandatory, any value
+        # or status that goes against it is a Data-Quality Exception").
+        # This field is UNCONDITIONALLY mandatory under the Source policy —
+        # unlike DBS Check (conditional on sensitive_site), there is no
+        # scenario in which the policy allows it to be "not required".
+        # A status asserting otherwise contradicts the policy itself, not
+        # just another value within the same field — a genuinely different
+        # contradiction than the status/expiry-date check below.
+        if isinstance(status, str) and status.strip().lower() in NOT_REQUIRED_EQUIVALENTS:
+            findings.append({"field": field, "status": status, "verdict": "data_quality_exception",
+                              "detail": f"{field.replace('_', ' ').title()} is marked '{status}', but this requirement is unconditionally mandatory under the Compliance Standard — there is no scenario in which it is not required. This contradicts the policy itself.",
+                              "required_action": "Flag for human review — this status value is not valid for a field the policy makes unconditionally mandatory."})
+            upgrade("data_quality_exception")
+            continue
 
         if status is None or classify_status_as_missing(status):
             findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
@@ -1077,7 +1101,8 @@ def northstar_transform_http():
     """
     if request.method == "OPTIONS":
         resp = jsonify({"status": "ok"})
-        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         resp.headers["Access-Control-Max-Age"] = "3600"
@@ -1149,7 +1174,8 @@ def northstar_audit_http():
     """
     if request.method == "OPTIONS":
         resp = jsonify({"status": "ok"})
-        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         resp.headers["Access-Control-Max-Age"] = "3600"
@@ -1175,7 +1201,8 @@ def evaluate_compliance_http():
     """
     if request.method == "OPTIONS":
         resp = jsonify({"status": "ok"})
-        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         resp.headers["Access-Control-Max-Age"] = "3600"
@@ -1196,7 +1223,8 @@ def evaluate_compliance_http():
 def audit_compare_http():
     if request.method == "OPTIONS":
         resp = jsonify({"status": "ok"})
-        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         resp.headers["Access-Control-Max-Age"] = "3600"
