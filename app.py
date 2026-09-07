@@ -1103,14 +1103,22 @@ def evaluate_worker_compliance(record, today=None):
     # never confirmed — which means DBS's stated value (dependent on the
     # worker genuinely being assigned/deployed here) cannot be verified
     # either, regardless of what DBS itself says.
+    #
+    # FIXED (per direct testing feedback): the cascade must ONLY apply when
+    # the worker is at a Sensitive Site. At a Standard Site, "DBS not
+    # required" is independently true based on worker.sensitive_site alone
+    # — a fact that does NOT depend on whether Site Induction has been
+    # confirmed. Cascading here would incorrectly flag a second, unrelated
+    # Data-Quality Exception for a value that was never actually in doubt.
     site_induction_finding = next((f for f in findings if f["field"] == "site_induction"), None)
     site_induction_is_ambiguous = site_induction_finding and site_induction_finding["verdict"] == "data_quality_exception"
+    dbs_genuinely_depends_on_deployment = worker.get("sensitive_site") is True
 
-    if site_induction_is_ambiguous:
+    if site_induction_is_ambiguous and dbs_genuinely_depends_on_deployment:
         detail = ("DBS Check's stated value cannot be independently verified: Site Induction's own status is "
-                   "unresolved (Data-Quality Exception), which means deployment to this site was never "
-                   "confirmed. DBS relevance and status depend on genuine site deployment, so this finding "
-                   "is unverifiable until Site Induction is resolved.")
+                   "unresolved (Data-Quality Exception), which means deployment to this Sensitive Site was "
+                   "never confirmed. DBS relevance and status depend on genuine site deployment, so this "
+                   "finding is unverifiable until Site Induction is resolved.")
         findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "data_quality_exception",
                           "detail": detail,
                           "required_action": "Resolve the Site Induction Data-Quality Exception first — DBS cannot be independently verified until then."})
