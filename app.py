@@ -8,7 +8,7 @@ as three tools for Claude and other AI systems:
 
   cgosti_transform  — maps any subject into the full C-G-O-S-T-I framework
   cgosti_connect    — maps IIC/IOC/EIC/EOC connection quadrants
-  cgosti_health     — returns Connection Health status.
+  cgosti_health     — returns Connection Health status
 
 Deployed independently from the CGOSTI Transformer app.
 """
@@ -882,31 +882,41 @@ def mcp_handler():
 
 _STATUS_CLASSIFICATION_CACHE = {}
 
-KNOWN_PRESENT_STATUSES = {"valid", "complete", "current", "done", "not_required", "not required", "expired", "pending", "active"}
-KNOWN_MISSING_STATUSES = {"missing", "absent", "not provided", "not_provided", "none", "n/a", "na", "unavailable", "not available", "incomplete", "not complete", "not_complete"}
+DIRECT_YES_VALUES = {"valid", "current", "complete", "done", "not_required", "not required", "active"}
+DIRECT_NO_VALUES = {"missing", "incomplete", "not completed", "not_complete", "absent", "expired", "none"}
+KNOWN_AMBIGUOUS_VALUES = {"not provided", "not_provided", "postpone", "postponed", "pending",
+                           "n/a", "na", "unavailable", "not available", "unknown", "tbc", "tbd"}
 
 
-def classify_status_as_missing(status_text):
+def classify_status_answer(status_text):
     """
-    Returns one of three states: "missing", "present", or "unknown".
+    REBUILT (03/09/2026, per Emmanuel's direct feedback in our meeting):
+    the previous synonym-based Drift ("incomplete" flagged as Drift just
+    for not being the exact word "missing") was REJECTED. Emmanuel was
+    explicit that a synonym which directly and unambiguously answers the
+    rule's yes/no question is NOT drift — it resolves normally to
+    Compliant or Non-Compliant, same as the exact word would.
 
-    FIXED (03/09/2026, per real-world testing where an unrecognised status
-    "incomplete" was incorrectly treated as compliant): previously, any
-    failure to classify (no API key, API error) defaulted to "present",
-    silently passing a worker whose actual status was never confirmed.
-    That is the wrong direction to fail in a compliance system — an
-    unclassifiable status should require human review, never a silent
-    pass. Callers must treat "unknown" as a Data-Quality Exception, not
-    as compliant.
+    The real distinction is whether a value DIRECTLY ANSWERS the rule's
+    question at all, or is EVASIVE/NON-COMMITTAL about the underlying
+    fact. "Incomplete" and "not completed" both directly say NO — the
+    requirement was not met. "Not provided" does not say yes or no — it
+    only says information is absent, which is a fundamentally different
+    kind of answer: an unanswerable/ambiguous one, not a negative one.
+
+    Returns "yes", "no", "ambiguous", or "unknown" (needs LLM for
+    genuinely novel wording not covered by any of the three known sets).
     """
-    key = (status_text or "").strip().lower()
-    if not key:
-        return "missing"  # empty/None status is unambiguously missing
+    if not isinstance(status_text, str) or not status_text.strip():
+        return "no"  # empty/None genuinely means missing — a direct, unambiguous "no"
 
-    if key in KNOWN_PRESENT_STATUSES:
-        return "present"
-    if key in KNOWN_MISSING_STATUSES:
-        return "missing"
+    key = status_text.strip().lower()
+    if key in DIRECT_YES_VALUES:
+        return "yes"
+    if key in DIRECT_NO_VALUES:
+        return "no"
+    if key in KNOWN_AMBIGUOUS_VALUES:
+        return "ambiguous"
 
     if key in _STATUS_CLASSIFICATION_CACHE:
         return _STATUS_CLASSIFICATION_CACHE[key]
@@ -920,17 +930,23 @@ def classify_status_as_missing(status_text):
             model="claude-sonnet-4-6", max_tokens=10, temperature=0,
             system=[{"type": "text", "text":
                 "You classify a single compliance status word or phrase into exactly one category. "
-                "Reply with ONLY the single word MISSING or PRESENT — nothing else, no punctuation, no explanation. "
-                "MISSING means the evidence is absent, not supplied, or not on file. "
-                "PRESENT means the evidence exists and has some status (valid, expired, pending, etc. all count as PRESENT — "
-                "only classify as MISSING if the evidence itself does not exist)."}],
+                "Reply with ONLY one word: YES, NO, or AMBIGUOUS — nothing else, no punctuation, no explanation. "
+                "YES means the value directly and unambiguously confirms the requirement is satisfied "
+                "(e.g. complete, valid, current, done). "
+                "NO means the value directly and unambiguously confirms the requirement is NOT satisfied "
+                "(e.g. missing, incomplete, not completed, expired, absent). "
+                "AMBIGUOUS means the value does not directly answer whether the requirement is satisfied or "
+                "not — it only indicates that information is unavailable, deferred, or unclear "
+                "(e.g. not provided, postponed, pending, TBC, unknown)."}],
             messages=[{"role": "user", "content": f'Status: "{status_text}"'}]
         )
         answer = msg.content[0].text.strip().upper()
-        if answer == "MISSING":
-            result = "missing"
-        elif answer == "PRESENT":
-            result = "present"
+        if answer == "YES":
+            result = "yes"
+        elif answer == "NO":
+            result = "no"
+        elif answer == "AMBIGUOUS":
+            result = "ambiguous"
         else:
             result = "unknown"  # model didn't answer cleanly - don't guess
     except Exception:
@@ -938,39 +954,6 @@ def classify_status_as_missing(status_text):
 
     _STATUS_CLASSIFICATION_CACHE[key] = result
     return result
-
-
-STRICT_ALLOWED_VALUES = {
-    "site_induction": {"complete", "missing"},
-    "identity_verification": {"complete", "missing"},
-    "right_to_work": {"valid", "expired", "missing"},
-    "health_and_safety_training": {"valid", "expired", "missing"},
-    "role_certification": {"valid", "expired", "missing"},
-    "dbs_check": {"valid", "expired", "missing", "not_required"},
-}
-
-
-def check_drift(field, status):
-    """
-    DRIFT (added 03/09/2026, per Emmanuel's exact framing): the Northstar
-    policy uses a small, fixed set of exact words per field. Drift means
-    the raw value is NOT one of those exact words — even if it can be
-    correctly interpreted as present/missing for compliance purposes.
-
-    Example: Site Induction's only policy-defined values are "complete"
-    or "missing". A record using "incomplete" or "not provided" is
-    correctly resolved to "missing" for the VERDICT, but the value
-    itself is still Drift — it is not the exact wording the policy uses,
-    and that gap is worth surfacing on its own, separate from compliance.
-
-    Drift is a parallel signal, silver-coded. It never changes the
-    verdict — it is reported alongside it as a data-quality notification.
-    """
-    if not isinstance(status, str):
-        return True
-    key = status.strip().lower()
-    allowed = STRICT_ALLOWED_VALUES.get(field, set())
-    return key not in allowed
 
 
 def evaluate_worker_compliance(record, today=None):
@@ -1025,57 +1008,55 @@ def evaluate_worker_compliance(record, today=None):
     })
 
     NOT_REQUIRED_EQUIVALENTS = {"not_required", "not required", "n/a", "na", "not applicable", "exempt", "optional"}
-    drift_flags = []
+    drift_log = []  # INTERNAL ONLY — every Data-Quality Exception event, logged for Mighty Units' own
+                     # visibility. Per Emmanuel's explicit instruction (03/09/2026 meeting): this must
+                     # NEVER appear in the Verdict report/export Trustera receives.
 
     for field in mandatory_fields:
         item = req.get(field, {})
         status = item.get("status")
         expiry_str = item.get("expiry_date")
 
-        if check_drift(field, status):
-            drift_flags.append({
-                "field": field,
-                "raw_value": status,
-                "detail": f"{field.replace('_', ' ').title()} uses the value '{status}', which is not one of the exact words the policy defines for this field. This does not change the compliance verdict, but is flagged as Drift for data-quality awareness."
-            })
-
-        # RULE 11 (field-level, added 02/09/2026 per Emmanuel's exact framing:
-        # "if Site Induction is explicitly/positively mandatory, any value
-        # or status that goes against it is a Data-Quality Exception").
-        # This field is UNCONDITIONALLY mandatory under the Source policy —
-        # unlike DBS Check (conditional on sensitive_site), there is no
-        # scenario in which the policy allows it to be "not required".
-        # A status asserting otherwise contradicts the policy itself, not
-        # just another value within the same field — a genuinely different
-        # contradiction than the status/expiry-date check below.
+        # RULE 11 (field-level): unconditionally mandatory field asserting "not required"
         if isinstance(status, str) and status.strip().lower() in NOT_REQUIRED_EQUIVALENTS:
+            detail = f"{field.replace('_', ' ').title()} is marked '{status}', but this requirement is unconditionally mandatory under the Compliance Standard — there is no scenario in which it is not required. This contradicts the policy itself."
             findings.append({"field": field, "status": status, "verdict": "data_quality_exception",
-                              "detail": f"{field.replace('_', ' ').title()} is marked '{status}', but this requirement is unconditionally mandatory under the Compliance Standard — there is no scenario in which it is not required. This contradicts the policy itself.",
+                              "detail": detail,
                               "required_action": "Flag for human review — this status value is not valid for a field the policy makes unconditionally mandatory."})
+            drift_log.append({"field": field, "raw_value": status, "reason": "field_level_contradiction", "detail": detail})
             upgrade("data_quality_exception")
             continue
 
-        if status is None:
-            findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
-                              "detail": f"{field.replace('_', ' ').title()} evidence is missing.",
+        # REBUILT (03/09/2026, per Emmanuel's direct meeting feedback): three-way
+        # classification (yes/no/ambiguous), NOT the old two-way present/missing.
+        # A synonym that directly answers yes or no (e.g. "incomplete" = a direct
+        # NO) resolves NORMALLY to Compliant/Non-Compliant — it is NOT drift.
+        # Only a value that fails to directly answer the question at all (e.g.
+        # "not provided") becomes a Data-Quality Exception.
+        answer = classify_status_answer(status)
+
+        if answer == "no":
+            findings.append({"field": field, "status": status, "verdict": "non_compliant",
+                              "detail": f"{field.replace('_', ' ').title()} evidence is missing or not completed.",
                               "required_action": f"Obtain and submit {field.replace('_', ' ')} evidence."})
             upgrade("non_compliant")
             continue
 
-        classification = classify_status_as_missing(status)
-        if classification == "missing":
-            findings.append({"field": field, "status": "missing", "verdict": "non_compliant",
-                              "detail": f"{field.replace('_', ' ').title()} evidence is missing.",
-                              "required_action": f"Obtain and submit {field.replace('_', ' ')} evidence."})
-            upgrade("non_compliant")
-            continue
-        if classification == "unknown":
+        if answer in ("ambiguous", "unknown"):
+            reason = "ambiguous_value" if answer == "ambiguous" else "unclassifiable_value"
+            detail = (f"{field.replace('_', ' ').title()} has a value ('{status}') that does not directly "
+                      f"confirm whether the requirement is satisfied or not — it indicates information is "
+                      f"unavailable, deferred, or unclear, rather than answering the requirement directly. "
+                      f"The Compliance Standard requires {field.replace('_', ' ')} evidence to be positively "
+                      f"provided; this value neither confirms nor denies that.")
             findings.append({"field": field, "status": status, "verdict": "data_quality_exception",
-                              "detail": f"{field.replace('_', ' ').title()} has an unrecognised status value ('{status}') that could not be confirmed as present or missing.",
-                              "required_action": "Flag for human review — status wording could not be classified with confidence."})
+                              "detail": detail,
+                              "required_action": "Flag for human review — this value does not directly answer the requirement."})
+            drift_log.append({"field": field, "raw_value": status, "reason": reason, "detail": detail})
             upgrade("data_quality_exception")
             continue
 
+        # answer == "yes" from here on — proceed to expiry-date logic as before
         if expiry_str:
             try:
                 expiry = date.fromisoformat(expiry_str)
@@ -1117,14 +1098,25 @@ def evaluate_worker_compliance(record, today=None):
     dbs = req.get("dbs_check", {})
     dbs_status = dbs.get("status")
 
-    if check_drift("dbs_check", dbs_status):
-        drift_flags.append({
-            "field": "dbs_check",
-            "raw_value": dbs_status,
-            "detail": f"DBS Check uses the value '{dbs_status}', which is not one of the exact words the policy defines for this field. This does not change the compliance verdict, but is flagged as Drift for data-quality awareness."
-        })
+    # CASCADE (per Emmanuel's exact example, 03/09/2026 meeting): if Site
+    # Induction's status is ambiguous, deployment to this specific site was
+    # never confirmed — which means DBS's stated value (dependent on the
+    # worker genuinely being assigned/deployed here) cannot be verified
+    # either, regardless of what DBS itself says.
+    site_induction_finding = next((f for f in findings if f["field"] == "site_induction"), None)
+    site_induction_is_ambiguous = site_induction_finding and site_induction_finding["verdict"] == "data_quality_exception"
 
-    if worker.get("sensitive_site"):
+    if site_induction_is_ambiguous:
+        detail = ("DBS Check's stated value cannot be independently verified: Site Induction's own status is "
+                   "unresolved (Data-Quality Exception), which means deployment to this site was never "
+                   "confirmed. DBS relevance and status depend on genuine site deployment, so this finding "
+                   "is unverifiable until Site Induction is resolved.")
+        findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "data_quality_exception",
+                          "detail": detail,
+                          "required_action": "Resolve the Site Induction Data-Quality Exception first — DBS cannot be independently verified until then."})
+        drift_log.append({"field": "dbs_check", "raw_value": dbs_status, "reason": "cascade_from_site_induction", "detail": detail})
+        upgrade("data_quality_exception")
+    elif worker.get("sensitive_site"):
         if dbs_status not in ("valid", "complete"):
             findings.append({"field": "dbs_check", "status": dbs_status, "verdict": "assignment_specific_non_compliant",
                               "detail": "DBS Check is mandatory at a Sensitive Site and is missing or not valid.",
@@ -1157,7 +1149,7 @@ def evaluate_worker_compliance(record, today=None):
         "verdict": worst_state,  # backward-compat key for compliance_check.html and northstar_audit.html
         "triggering_requirements": triggering,
         "controls_applied": controls_applied,
-        "drift_flags": drift_flags,  # NEW — parallel signal, never affects overall_status
+        "drift_log": drift_log,  # INTERNAL ONLY — every Data-Quality Exception event. Never include in the customer-facing Verdict report/export.
         "evaluation_date": today.isoformat(),
         "findings": findings,
     }
