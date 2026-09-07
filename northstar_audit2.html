@@ -299,7 +299,7 @@
         else if (f.verdict === 'expiring_soon') a++;
         else r++;
       });
-      const driftFlags = result.drift_flags || [];
+      const driftFlags = result.drift_log || [];
       const driftCount = driftFlags.length;
       document.getElementById('countsRow').innerHTML =
         `<div class="count-pill g">🟢 ${g} Compliant</div><div class="count-pill a">🟡 ${a} Expiring Soon</div><div class="count-pill r">🔴 ${r} Non-Compliant</div><div class="count-pill" style="background:rgba(192,192,192,0.12);color:#c0c0c0;border:1px solid rgba(192,192,192,0.35);">⚪ ${driftCount} Drift</div>`;
