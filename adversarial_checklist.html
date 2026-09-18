@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGOSTI Adversarial Checklist Tool</title>
+<style>
+  :root {
+    --navy: #0a0a2e; --gold: #e8a838; --cyan: #00b4d8;
+    --green: #10b981; --amber: #f4a261; --red: #e63946; --purple: #9b5de5; --grey: #9ca3af;
+    --mid: #6b7a99;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0b0b10; font-family: 'Courier New', monospace; color: #ddd; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 20px 32px;
+    border-bottom: 1px solid rgba(232,168,56,0.25); background: var(--navy);
+  }
+  .cube { width: 36px; height: 36px; flex-shrink: 0; }
+  .header-title { font-size: 16px; font-weight: 900; color: var(--gold); letter-spacing: 0.08em; }
+  .header-sub { font-size: 10px; color: var(--mid); letter-spacing: 0.1em; margin-top: 2px; }
+  .badge-demo {
+    margin-left: auto; font-size: 10px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(0,180,216,0.4); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.1em;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 48px 24px 100px; }
+  .tagline { font-size: 13px; color: var(--purple); font-weight: 700; line-height: 1.6; margin-bottom: 32px; }
+
+  .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .grid-two { grid-template-columns: 1fr; } }
+  .doc-panel { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 20px; }
+  .doc-panel.rulebook { border-color: rgba(0,180,216,0.3); }
+  .doc-panel.tactics { border-color: rgba(232,168,56,0.3); }
+  .doc-label { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; margin-bottom: 4px; }
+  .doc-panel.rulebook .doc-label { color: var(--cyan); }
+  .doc-panel.tactics .doc-label { color: var(--gold); }
+  .doc-sub { font-size: 10px; color: var(--mid); margin-bottom: 12px; }
+  textarea {
+    width: 100%; min-height: 180px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; color: #eee; font-family: 'Courier New', monospace; font-size: 12px;
+    padding: 12px; resize: vertical; outline: none; line-height: 1.6;
+  }
+  textarea:focus { border-color: rgba(199,125,255,0.5); }
+  .upload-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .upload-btn {
+    font-size: 10px; padding: 6px 12px; background: transparent; border: 1px solid rgba(255,255,255,0.2);
+    color: #aaa; border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .upload-btn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .filename { font-size: 10px; color: var(--mid); }
+
+  .tab-row { display: flex; gap: 4px; margin: 32px 0 0; border-bottom: 1px solid rgba(255,255,255,0.1); flex-wrap: wrap; }
+  .tab-btn {
+    padding: 10px 18px; background: transparent; border: none; border-bottom: 3px solid transparent;
+    color: #888; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 0.04em;
+  }
+  .tab-btn:hover { color: #ccc; }
+  .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .tab-btn .tab-status { margin-left: 6px; font-size: 10px; }
+
+  .tab-panel { display: none; padding-top: 24px; }
+  .tab-panel.active { display: block; }
+
+  .action-row { display: flex; gap: 10px; justify-content: center; margin: 20px 0; flex-wrap: wrap; }
+  .btn {
+    padding: 10px 24px; border-radius: 8px; font-weight: 700; font-size: 12px; letter-spacing: 0.08em;
+    cursor: pointer; font-family: inherit; border: none; transition: transform 0.15s, opacity 0.15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .btn-transform { background: linear-gradient(135deg,#9b5de5,#00b4d8); color: #fff; }
+
+  .status-line { text-align: center; font-size: 11px; color: var(--mid); margin-bottom: 16px; min-height: 16px; }
+
+  .disclaimer-box {
+    background: rgba(232,168,56,0.06); border: 1px solid rgba(232,168,56,0.25); border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 16px; font-size: 10px; color: #ccc; line-height: 1.6;
+  }
+
+  .facts-label { font-size: 11px; font-weight: 700; color: var(--cyan); letter-spacing: 0.1em; margin: 8px 0 10px; }
+  .cell-card {
+    padding: 10px 14px; border-radius: 6px; margin-bottom: 6px; border-left: 4px solid transparent; font-size: 12px; color: #ddd;
+  }
+  .cell-card.holds { background: rgba(16,185,129,0.06); border-color: var(--green); }
+  .cell-card.fractures { background: rgba(230,57,70,0.06); border-color: var(--red); }
+  .cell-card.partial { background: rgba(244,162,97,0.06); border-color: var(--amber); }
+  .cell-card.untestable { background: rgba(156,163,175,0.06); border-color: var(--grey); }
+  .cell-header { font-weight: 700; margin-bottom: 3px; font-size: 11px; color: #aaa; }
+  .dominant-badge {
+    display: inline-block; margin-top: 6px; padding: 4px 10px; border-radius: 6px; font-size: 10px; font-weight: 700;
+    background: rgba(232,168,56,0.12); color: var(--gold); border: 1px solid rgba(232,168,56,0.3);
+  }
+
+  .report-controls {
+    margin-top: 40px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.1); text-align: center;
+  }
+  .report-label { font-size: 11px; font-weight: 700; color: var(--gold); letter-spacing: 0.1em; margin-bottom: 12px; }
+  .report-toggle { display: flex; gap: 8px; justify-content: center; margin-bottom: 16px; }
+  .toggle-btn {
+    padding: 8px 20px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer;
+    background: transparent; border: 1px solid rgba(255,255,255,0.2); color: #aaa; font-family: inherit;
+  }
+  .toggle-btn.selected { background: rgba(155,93,229,0.15); border-color: var(--purple); color: var(--purple); }
+  .export-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .export-btn {
+    padding: 6px 14px; background: transparent; border: 1px solid rgba(87,204,153,0.3); color: #57cc99;
+    border-radius: 6px; font-size: 10px; cursor: pointer; font-family: inherit;
+  }
+  .export-btn:hover { background: rgba(87,204,153,0.08); }
+
+  footer { text-align: center; padding: 24px; font-size: 9px; color: #666; letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="cube" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="50,4 90,25 50,46 10,25" fill="#e8a838"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="#c9932e"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="#f6c15e"/>
+    <polygon points="50,4 90,25 50,46 10,25" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+  </svg>
+  <div>
+    <div class="header-title">CGOSTI ADVERSARIAL CHECKLIST TOOL</div>
+    <div class="header-sub">MIGHTY UNITS LTD × SUBSURFACE (GARRY CAMERON)</div>
+  </div>
+  <div class="badge-demo">DEMO BUILD</div>
+</header>
+
+<main>
+  <div class="tagline">Stress-tests a system design against four adversarial pressures — Resource Constraints, Jurisdiction Conflicts, Information Gaps, and Adversarial Intent — one CGOSTI layer at a time.</div>
+
+  <div class="grid-two">
+    <div class="doc-panel rulebook">
+      <div class="doc-label">INSTRUCTION RULEBOOK</div>
+      <div class="doc-sub">The validation requirements to assess against</div>
+      <textarea id="rulebookText" placeholder="Paste the policy, standard, or validation requirements..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('rulebookFile').click()">↑ UPLOAD</button>
+        <input type="file" id="rulebookFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'rulebookText')">
+        <span class="filename" id="rulebookFilename"></span>
+      </div>
+    </div>
+    <div class="doc-panel tactics">
+      <div class="doc-label">TACTICS UNDER TEST</div>
+      <div class="doc-sub">The system or case being assessed — text, JSON, MD, CGOSTI output, or uploaded file</div>
+      <textarea id="tacticsText" placeholder="Paste the system design or case..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('tacticsFile').click()">↑ UPLOAD</button>
+        <input type="file" id="tacticsFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'tacticsText')">
+        <span class="filename" id="tacticsFilename"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-row" id="tabRow">
+    <button class="tab-btn active" data-layer="goal" onclick="switchTab('goal')">GOAL <span class="tab-status" id="status_goal"></span></button>
+    <button class="tab-btn" data-layer="objectives" onclick="switchTab('objectives')">OBJECTIVES <span class="tab-status" id="status_objectives"></span></button>
+    <button class="tab-btn" data-layer="strategy" onclick="switchTab('strategy')">STRATEGY <span class="tab-status" id="status_strategy"></span></button>
+    <button class="tab-btn" data-layer="tactics" onclick="switchTab('tactics')">TACTICS <span class="tab-status" id="status_tactics"></span></button>
+    <button class="tab-btn" data-layer="innovations" onclick="switchTab('innovations')">INNOVATIONS <span class="tab-status" id="status_innovations"></span></button>
+  </div>
+
+  <div class="tab-panel active" id="panel_goal" data-layer="goal"></div>
+  <div class="tab-panel" id="panel_objectives" data-layer="objectives"></div>
+  <div class="tab-panel" id="panel_strategy" data-layer="strategy"></div>
+  <div class="tab-panel" id="panel_tactics" data-layer="tactics"></div>
+  <div class="tab-panel" id="panel_innovations" data-layer="innovations"></div>
+
+  <div class="report-controls">
+    <div class="report-label">REPORT SCOPE</div>
+    <div class="report-toggle">
+      <button class="toggle-btn selected" id="toggleFull" onclick="setReportScope('full')">FULL REPORT (ALL TABS)</button>
+      <button class="toggle-btn" id="togglePartial" onclick="setReportScope('partial')">PARTIAL (CURRENT TAB)</button>
+    </div>
+    <div class="export-row">
+      <button class="export-btn" onclick="exportAs('json')">↓ JSON</button>
+      <button class="export-btn" onclick="exportAs('md')">↓ MD</button>
+    </div>
+  </div>
+</main>
+
+<footer>CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026 · POWERED BY CLAUDE (ANTHROPIC) · BUILT WITH SUBSURFACE</footer>
+
+<script>
+  const API_BASE = "https://mcp.mightyunits.com";
+  const LAYERS = ["goal", "objectives", "strategy", "tactics", "innovations"];
+  const LAYER_LABELS = { goal: "Goal", objectives: "Objectives", strategy: "Strategy", tactics: "Tactics", innovations: "Innovations" };
+  const PRESSURE_BADGES = {
+    resource_constraints: "⏱ Resource Constraints",
+    jurisdiction_conflicts: "⚖ Jurisdiction Conflict",
+    information_gaps: "❓ Information Gap",
+    adversarial_intent: "🎯 Adversarial Intent"
+  };
+  const SEVERITY_LABELS = { holds: "🟢 Holds", fractures: "🔴 Fractures", partial: "🟡 Partial", untestable: "⚪ Untestable" };
+  const SEVERITY_DOT = { holds: "🟢", fractures: "🔴", partial: "🟡", untestable: "⚪" };
+
+  let currentTab = "goal";
+  let reportScope = "full";
+  const layerResults = {};
+
+  function handleFileUpload(input, targetId) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById(targetId.replace('Text','Filename')).textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById(targetId).value = e.target.result; };
+    reader.readAsText(file);
+  }
+
+  function switchTab(layer) {
+    currentTab = layer;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.layer === layer));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.dataset.layer === layer));
+    renderTabPanel(layer);
+  }
+
+  function renderTabPanel(layer) {
+    const panel = document.getElementById('panel_' + layer);
+    const result = layerResults[layer];
+
+    let html = `
+      <div class="action-row">
+        <button class="btn btn-transform" onclick="runTransformAudit('${layer}')" id="btn_${layer}">TRANSFORM &amp; AUDIT — ${LAYER_LABELS[layer].toUpperCase()}</button>
+      </div>
+      <div class="status-line" id="status_line_${layer}"></div>
+      <div id="error_${layer}" style="display:none; background:rgba(230,57,70,0.1); border:1px solid rgba(230,57,70,0.4); border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:11px; color:#ffb3b8; white-space:pre-wrap;"></div>
+    `;
+
+    if (result) {
+      html += `<div class="disclaimer-box">⚠ Structural read for ${LAYER_LABELS[layer]} only — not a confirmed verdict. ${result.layer_note || ''}</div>`;
+      html += `<div class="facts-label">FACTS &amp; FINDINGS — ${LAYER_LABELS[layer].toUpperCase()}</div>`;
+      (result.cells || []).forEach(c => {
+        html += `
+          <div class="cell-card ${c.severity}">
+            <div class="cell-header">${PRESSURE_BADGES[c.pressure] || c.pressure} — ${SEVERITY_LABELS[c.severity] || c.severity}</div>
+            <div>${c.detail}</div>
+          </div>`;
+      });
+      if (result.dominant_pressure) {
+        html += `<div class="dominant-badge">Dominant: ${PRESSURE_BADGES[result.dominant_pressure.pressure] || result.dominant_pressure.pressure} — ${SEVERITY_LABELS[result.dominant_pressure.severity] || result.dominant_pressure.severity}</div>`;
+      }
+    }
+
+    panel.innerHTML = html;
+  }
+
+  async function runTransformAudit(layer) {
+    const rulebook = document.getElementById('rulebookText').value.trim();
+    const tactics = document.getElementById('tacticsText').value.trim();
+    if (!rulebook || !tactics) {
+      document.getElementById('status_line_' + layer).textContent = '⚠ Please provide both the Rulebook and Tactics.';
+      return;
+    }
+
+    const btn = document.getElementById('btn_' + layer);
+    const errBox = document.getElementById('error_' + layer);
+    errBox.style.display = 'none';
+    btn.disabled = true;
+    document.getElementById('status_line_' + layer).textContent = 'Running assessment for ' + LAYER_LABELS[layer] + '...';
+
+    try {
+      const res = await fetch(API_BASE + '/adversarial-checklist', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rulebook, tactics, layer })
+      });
+      if (!res.ok) {
+        errBox.textContent = 'HTTP ' + res.status + ': ' + await res.text();
+        errBox.style.display = 'block';
+        btn.disabled = false;
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        errBox.textContent = 'Error: ' + data.error;
+        errBox.style.display = 'block';
+        btn.disabled = false;
+        return;
+      }
+
+      layerResults[layer] = data;
+      document.getElementById('status_' + layer).textContent = SEVERITY_DOT[data.dominant_pressure ? data.dominant_pressure.severity : ''] || '✓';
+      document.getElementById('status_line_' + layer).textContent = '✅ Assessment complete for ' + LAYER_LABELS[layer] + '.';
+      renderTabPanel(layer);
+    } catch (e) {
+      errBox.textContent = e.name + ': ' + e.message;
+      errBox.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function setReportScope(scope) {
+    reportScope = scope;
+    document.getElementById('toggleFull').classList.toggle('selected', scope === 'full');
+    document.getElementById('togglePartial').classList.toggle('selected', scope === 'partial');
+  }
+
+  function exportAs(format) {
+    let layersToExport = reportScope === 'full' ? LAYERS.filter(l => layerResults[l]) : (layerResults[currentTab] ? [currentTab] : []);
+    if (layersToExport.length === 0) {
+      alert('No assessed tabs to export yet. Run Transform & Audit on at least one tab first.');
+      return;
+    }
+
+    const payload = layersToExport.map(l => layerResults[l]);
+
+    if (format === 'json') {
+      downloadBlob(JSON.stringify(payload, null, 2), 'adversarial-checklist-' + reportScope + '.json', 'application/json');
+    } else {
+      let text = `# CGOSTI Adversarial Checklist — Structural Read (${reportScope === 'full' ? 'Full Report' : 'Partial — ' + LAYER_LABELS[currentTab]})\n\n`;
+      payload.forEach(result => {
+        text += `## ${LAYER_LABELS[result.layer] || result.layer}\n\n${result.layer_note || ''}\n\n`;
+        (result.cells || []).forEach(c => {
+          text += `- **${PRESSURE_BADGES[c.pressure] || c.pressure}**: ${SEVERITY_LABELS[c.severity] || c.severity} — ${c.detail}\n`;
+        });
+        text += `\n`;
+      });
+      downloadBlob(text, 'adversarial-checklist-' + reportScope + '.md', 'text/markdown');
+    }
+  }
+  function downloadBlob(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  renderTabPanel('goal');
+</script>
+
+</body>
+</html>

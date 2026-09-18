@@ -196,7 +196,7 @@ INNOVATION_AI (DIAGNOSTIC — I∞): The deepest structural insight — the root
 IMPORTANT: In Diagnostic Mode — the JSON keys remain the same (goal, objectives, strategy, tactics, innovation_plus, innovation_minus, innovation_replace) but the content follows the Diagnostic framework above, not the standard system description framework.
 
 QUALITY DIAGNOSTIC RULE — applies to ALL outputs:
-Before generating the Innovation layer, scan the input subject against these eight quality dimensions in priority order:
+Before generating the Innovation layer, scan the input subject against these nine quality dimensions in priority order:
 1. Functional Suitability — does it do what it should?
 2. Usability — can users engage with it easily?
 3. Performance Efficiency — is it fast and efficient?
@@ -205,6 +205,11 @@ Before generating the Innovation layer, scan the input subject against these eig
 6. Scalability & Capacity — can it grow?
 7. Maintainability — can it be sustained?
 8. Portability & Compatibility — can it work everywhere?
+9. Classification & Domain Completeness — does the subject's own categorisation model (its states, verdicts, or decision categories) actually cover every real-world case it will encounter, or does it force ambiguous/contradictory/edge-case input into a category that doesn't truly fit? This dimension asks not "does the system run correctly" but "is the system's own logical design missing a category it needs" — e.g. a compliance system with only Pass/Fail states may be silently forcing genuinely ambiguous data into one of the two, when the correct answer is neither. Check this dimension explicitly even when the other eight all score well, since a well-engineered system built on an incomplete classification model will still produce confidently wrong answers.
+
+   CONCRETE TEST for Dimension 9 (do not skip — abstract awareness of this dimension is not sufficient): for any subject that involves classification, verdicts, or decision categories, explicitly construct three test inputs — (a) one that clearly and directly satisfies the rule/requirement, (b) one that clearly and directly fails it, (c) one that is genuinely ambiguous, contradictory, or non-responsive to the rule's actual question. Check whether case (c) has its own distinct category in the existing design, or whether it would be silently forced into category (a) or (b). If it would be forced into either, that is a real, reportable gap — name it explicitly in I+ (the missing category) rather than leaving it as a general observation.
+
+   I∞ BACKSTOP REQUIREMENT: before finalising I∞, explicitly check whether I+, I−, and I± have already addressed every one of the nine dimensions above. If any dimension — especially Dimension 9 — was not concretely addressed by the other three mechanisms, I∞ must surface it directly, even if this means I∞'s output is a smaller, more grounded finding rather than an entirely new speculative architecture. I∞ does not automatically catch what the other three miss simply by existing — it must be explicitly instructed to check for and fill that gap.
 
 For each Innovation mechanism, identify which quality dimension is being addressed and apply the correct mechanism:
 - I+ Composed: adds what is MISSING from the quality checklist
@@ -233,6 +238,32 @@ Return ONLY valid JSON. No markdown. No backticks.
 Keys: goal (string), objectives (array), strategy (string), tactics (array), innovation_plus (string), innovation_minus (string), innovation_replace (string).
 Do NOT generate innovation_ai in this call. It will be requested separately."""
 
+
+SYSTEM_PROMPT_ADVERSARIAL_CHECKLIST = """You are the CGOSTI Adversarial Checklist Assessor, built for Mighty Units Ltd in collaboration with Garry Cameron (Subsurface).
+
+You are given an INSTRUCTION RULEBOOK (the validation requirements a system design must be assessed against), TACTICS UNDER TEST (the actual system or case being assessed — structured or unstructured text), and ONE SPECIFIC CGOSTI LAYER to assess this call.
+
+Your task: stress-test the Tactics against all four adversarial pressure dimensions, but ONLY for the single layer specified — not the other four layers. This is a per-tab assessment; the user will request the other layers separately, in their own calls, if and when they choose to.
+
+THE FOUR PRESSURE DIMENSIONS (Garry Cameron's exact definitions — Subsurface):
+These four pressures stress-test the architecture at each layer. When they activate, the framework reveals which layers hold and which fracture.
+1. Resource Constraints — Limited time, money, people, or access. Does the approach require more than available?
+2. Jurisdiction Conflicts — Multiple authorities or competing rule sets. Can the approach navigate them?
+3. Information Gaps — Missing data, unclear causation, asymmetric knowledge. Does the approach work anyway?
+4. Adversarial Intent — An opponent actively working against you. Will they exploit weaknesses in your structure?
+
+For the ONE specified layer, assess each of the four pressures in turn: does that layer hold, fracture, show partial resilience, or is it genuinely untestable/ambiguous given the input provided. Be honest — do not default to "holds" if the input doesn't actually support that conclusion, and do not manufacture a fracture that isn't genuinely supported by the Tactics provided.
+
+CRITICAL — STRUCTURAL READ, NOT CONFIRMED VALIDATION: your output is a structural read of the design as submitted. It is NOT a confirmed, outcome-validated judgement. Never claim a finding is "confirmed" or "proven" — only that the structure, as described, appears to hold, fracture, or remain ambiguous under a given pressure. Real-world confirmation can only come from an actual outcome (e.g. a regulatory ruling), which this assessment does not have access to.
+
+After assessing all four pressures for this layer, identify the SINGLE most severe finding (fractures > partial > untestable > holds, in that priority order) as this layer's "dominant pressure."
+
+Return ONLY valid JSON. No markdown. No backticks.
+Keys:
+  layer (the layer name you were asked to assess),
+  cells (array of exactly 4 objects — one per pressure — each with: pressure ["resource_constraints","jurisdiction_conflicts","information_gaps","adversarial_intent"], severity ["holds","fractures","partial","untestable"], detail [string, the reasoning]),
+  dominant_pressure (object: pressure, severity, detail — the single most severe finding among the four, per the priority order above),
+  layer_note (string — one or two sentences, explicitly framed as a structural read pending real-world confirmation, not a verdict, for this layer specifically)."""
 
 SYSTEM_PROMPT_NORTHSTAR_SUBJECT = """You are the CGOSTI Northstar Compliance Structurer for Mighty Units Ltd.
 
@@ -804,6 +835,23 @@ def northstar_audit_page_v2():
         return jsonify({"error": "Northstar audit v2 page file not found on server."}), 404
 
 
+@app.route("/adversarial-checklist", methods=["GET"])
+def adversarial_checklist_page():
+    """
+    Fifth demo page (17/09/2026) — the CGOSTI Adversarial Checklist Tool,
+    built from Garry Cameron's (Subsurface) delivered pressure-by-layer
+    matrix. Separate from all Northstar pages; a genuinely different
+    assessment domain, not a compliance verdict.
+    """
+    try:
+        demo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adversarial_checklist.html")
+        with open(demo_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except FileNotFoundError:
+        return jsonify({"error": "Adversarial checklist page file not found on server."}), 404
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "CGOSTI MCP Server"})
@@ -1162,6 +1210,76 @@ def evaluate_worker_compliance(record, today=None):
         "findings": findings,
     }
 
+
+
+@app.route("/adversarial-checklist", methods=["POST", "OPTIONS"])
+def adversarial_checklist_http():
+    """
+    Runs the adversarial pressure assessment (Garry Cameron's Resource
+    Constraints / Jurisdiction Conflicts / Information Gaps / Adversarial
+    Intent) for ONE CGOSTI layer at a time, per the confirmed tab-based
+    UI design (17/09/2026): the user selects a tab (Goal, Objectives,
+    Strategy, Tactics, or Innovations) and clicks Transform then Audit
+    for that tab specifically — not all five layers in one call.
+
+    Unlike the Northstar compliance engine, this is NOT deterministic —
+    assessing whether a design holds under adversarial pressure requires
+    genuine judgement, not date arithmetic. temperature=0 and result
+    caching (per rulebook+tactics+layer) are applied for maximum
+    consistency, but this remains an LLM-driven assessment, not a
+    calculated verdict. The output is explicitly framed as a structural
+    read, never a confirmed validation.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"status": "ok"})
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
+
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    rulebook = (body.get("rulebook") or "").strip()
+    tactics = (body.get("tactics") or "").strip()
+    layer = (body.get("layer") or "").strip().lower()
+
+    VALID_LAYERS = {"goal", "objectives", "strategy", "tactics", "innovations"}
+    if not rulebook or not tactics:
+        return jsonify({"error": "Both 'rulebook' and 'tactics' are required."}), 400
+    if layer not in VALID_LAYERS:
+        return jsonify({"error": f"'layer' must be one of: {', '.join(sorted(VALID_LAYERS))}"}), 400
+
+    try:
+        cache_key = hashlib.sha256((rulebook.strip() + "||" + tactics.strip() + "||" + layer).encode("utf-8")).hexdigest()
+
+        if cache_key in _STRUCTURE_CACHE:
+            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
+        else:
+            if not ANTHROPIC_API_KEY:
+                return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=2048, temperature=0,
+                system=[{"type": "text", "text": SYSTEM_PROMPT_ADVERSARIAL_CHECKLIST, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content":
+                    f"INSTRUCTION RULEBOOK:\n{rulebook}\n\nTACTICS UNDER TEST:\n{tactics}\n\nLAYER TO ASSESS THIS CALL: {layer}"}]
+            )
+            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            result = json.loads(raw)
+            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+            _STRUCTURE_CACHE[cache_key] = encrypted
+
+        return jsonify(result)
+
+    except json.JSONDecodeError:
+        return jsonify({"error": "The assessment response was too long and got cut off. Try shorter input."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/northstar-transform", methods=["POST", "OPTIONS"])
