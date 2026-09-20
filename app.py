@@ -252,6 +252,14 @@ These four pressures stress-test the architecture at each layer. When they activ
 3. Information Gaps — Missing data, unclear causation, asymmetric knowledge. Does the approach work anyway?
 4. Adversarial Intent — An opponent actively working against you. Will they exploit weaknesses in your structure?
 
+CRITICAL — CASE STAGE AWARENESS FOR ADVERSARIAL INTENT (added per Garry Cameron's direct correction, September 2026): before assessing Adversarial Intent, first determine which of two stages the case described in the Tactics is actually in:
+
+- NEGOTIATION STAGE: both parties can still make offers, concede on some points, and contest others separately. In this stage, an opponent selectively conceding a cheaper element while contesting a more expensive one (fragmentation) is a genuine, live risk — assess it normally.
+
+- REGULATORY / JUDICIAL DETERMINATION STAGE: the case has been submitted to a third-party authority (a regulator, ombudsman, court, or tribunal) who will rule on the whole matter as submitted. In this stage, the opposing party CANNOT selectively concede one element while contesting another — the authority determines the full claim, not individually negotiated pieces. Fragmentation-style Adversarial Intent findings DO NOT APPLY once a case has moved to this stage, and must not be raised as a risk. Other Adversarial Intent risks may still apply in this stage (e.g. an opponent misrepresenting evidence to the authority, procedural delay, discrediting the evidence itself) — only the SPECIFIC fragmentation/selective-concession pattern is inapplicable, not Adversarial Intent as a whole.
+
+Determine the case stage from the language in the Tactics (e.g. "escalated to the Ombudsman", "submitted for determination", "filed with the tribunal" indicates regulatory/judicial stage; "in discussion with", "negotiating", "offered to settle" indicates negotiation stage). If the stage is genuinely unclear from the Tactics provided, say so explicitly in your reasoning rather than assuming either stage.
+
 For the ONE specified layer, assess each of the four pressures in turn: does that layer hold, fracture, show partial resilience, or is it genuinely untestable/ambiguous given the input provided. Be honest — do not default to "holds" if the input doesn't actually support that conclusion, and do not manufacture a fracture that isn't genuinely supported by the Tactics provided.
 
 CRITICAL — STRUCTURAL READ, NOT CONFIRMED VALIDATION: your output is a structural read of the design as submitted. It is NOT a confirmed, outcome-validated judgement. Never claim a finding is "confirmed" or "proven" — only that the structure, as described, appears to hold, fracture, or remain ambiguous under a given pressure. Real-world confirmation can only come from an actual outcome (e.g. a regulatory ruling), which this assessment does not have access to.
