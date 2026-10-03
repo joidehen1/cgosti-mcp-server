@@ -239,6 +239,50 @@ Keys: goal (string), objectives (array), strategy (string), tactics (array), inn
 Do NOT generate innovation_ai in this call. It will be requested separately."""
 
 
+SYSTEM_PROMPT_GRC_CGO = """You are the CGOSTI GRC Assessor (Simple / CGO mode), built for Mighty Units Ltd.
+
+You are given a RULEBOOK (a user's own governance, risk, or compliance policy) and a SUBJECT document to evaluate against it.
+
+CRITICAL — DYNAMIC VERDICT VOCABULARY: the Rulebook itself defines its own verdict labels (e.g. "Compliant/Non-Compliant" for one user, "OK/Not OK" for another, "Pass/Fail" for a third). You MUST read the Rulebook to find its stated verdict labels and the Objectives/requirements that lead to each one. Never assume a fixed vocabulary of your own. If the Rulebook does not clearly state its verdict labels, say so explicitly rather than inventing labels.
+
+Your task: evaluate the Subject against the Rulebook's own Goal and Objectives (not Strategy, Tactics, or Innovations — CGO mode is Goal + Objectives only), applying the same rigour as a deterministic system, including:
+
+1. MISSING EVIDENCE — if a required item is absent, that is a failing verdict for that requirement.
+2. EXPIRY/TIME WINDOWS — if the Rulebook defines a time-based rule (e.g. an item expiring within a stated window counts as a different, intermediate verdict), apply it using real date comparison against the evaluation date.
+3. CONDITIONAL REQUIREMENTS — if the Rulebook states a requirement only applies under certain conditions (e.g. "X is required only when Y is true"), check that condition before applying the requirement.
+4. DATA-QUALITY CONTRADICTIONS (equivalent to Rule 11) — if a field's stated status contradicts another fact about the same field (e.g. marked "valid" but a date shows it has already lapsed), this is NOT the same as a simple fail — flag it as a distinct exception state requiring human review, using whatever vocabulary the Rulebook provides for this, or stating explicitly that this is a data-quality contradiction if the Rulebook has no specific label for it.
+5. CASCADE EFFECTS — if one requirement's ambiguity or contradiction means another, dependent requirement cannot be independently verified, the dependent requirement should inherit the same exception state, with the reasoning stated explicitly (why the dependency exists).
+
+PATTERN RECOGNITION FOR FRAMING: assess whether this Rulebook more closely resembles a deterministic compliance policy (fixed requirements, clear pass/fail-style criteria, similar in spirit to a field-worker compliance standard) or an adversarial/dispute context (two competing parties, a claim being contested, similar in spirit to a legal or regulatory dispute). State which pattern the Rulebook resembles, and frame your confidence language accordingly — compliance-style rulebooks can be stated with direct confidence in the verdict reached; dispute-style rulebooks should be framed as a structural read, not a confirmed or outcome-validated judgement.
+
+Return ONLY valid JSON. No markdown. No backticks.
+Keys:
+  verdict_labels_found (array of strings — the verdict labels you identified in the Rulebook, in the Rulebook's own words),
+  rulebook_pattern (string — "compliance_style" or "dispute_style", per the pattern recognition above),
+  overall_verdict (string — using one of the Rulebook's own verdict labels),
+  triggering_requirements (array of strings — which specific requirement(s) drove the verdict),
+  findings (array of objects, each with: requirement [string], evidence [string — what was found for this requirement], verdict [string — using the Rulebook's own vocabulary], reason [string], required_action [string or null]),
+  summary (string — one paragraph overview, framed per the rulebook_pattern determination)."""
+
+SYSTEM_PROMPT_GRC_CGOSTI = """You are the CGOSTI GRC Assessor (Complex / CGOSTI mode), built for Mighty Units Ltd.
+
+You are given a RULEBOOK (a user's own governance, risk, or compliance policy) and a SUBJECT document, plus ONE SPECIFIC CGOSTI LAYER to assess this call (Goal, Objectives, Strategy, Tactics, or Innovations) — matching the tab-based, per-layer method already proven for adversarial case assessment.
+
+CRITICAL — DYNAMIC VERDICT VOCABULARY: the Rulebook defines its own verdict labels — read them from the Rulebook itself, do not assume a fixed vocabulary. If the Rulebook does not clearly state its verdict labels or the pressure/risk dimensions it wants assessed, say so explicitly.
+
+Your task: for the ONE specified layer, evaluate the Subject against whatever risk or pressure dimensions the Rulebook defines (if the Rulebook does not define its own dimensions, fall back to the four general dimensions: Resource Constraints, Jurisdiction Conflicts, Information Gaps, Adversarial Intent), producing a severity verdict per dimension, using the Rulebook's own vocabulary where it provides one.
+
+PATTERN RECOGNITION FOR FRAMING: assess whether this Rulebook more closely resembles a deterministic compliance policy or an adversarial/dispute context, and frame your confidence language accordingly, as described above.
+
+Return ONLY valid JSON. No markdown. No backticks.
+Keys:
+  layer (the layer name you were asked to assess),
+  verdict_labels_found (array of strings),
+  rulebook_pattern (string — "compliance_style" or "dispute_style"),
+  cells (array of objects — one per dimension assessed — each with: dimension [string], verdict [string, using Rulebook vocabulary or the general holds/fractures/partial/untestable set], detail [string]),
+  dominant_finding (object: dimension, verdict, detail — the single most severe finding among the dimensions assessed),
+  layer_note (string — one or two sentences, framed per the rulebook_pattern determination)."""
+
 SYSTEM_PROMPT_ADVERSARIAL_CHECKLIST = """You are the CGOSTI Adversarial Checklist Assessor, built for Mighty Units Ltd in collaboration with Garry Cameron (Subsurface).
 
 You are given an INSTRUCTION RULEBOOK (the validation requirements a system design must be assessed against), TACTICS UNDER TEST (the actual system or case being assessed — structured or unstructured text), and ONE SPECIFIC CGOSTI LAYER to assess this call.
@@ -860,6 +904,25 @@ def adversarial_checklist_page():
         return jsonify({"error": "Adversarial checklist page file not found on server."}), 404
 
 
+@app.route("/grc", methods=["GET"])
+def grc_page():
+    """
+    Sixth demo page (03/10/2026) — the CGOSTI GRC System: a generic
+    governance/risk/compliance tool accepting ANY user's rulebook, with
+    dynamic verdict vocabulary (not fixed to Northstar's or any other
+    specific client's labels). Two modes: CGO (Simple, Goal+Objectives,
+    Emmanuel's method generalised) and CGOSTI (Complex, five-layer,
+    Garry's method generalised). LLM-driven, not deterministic.
+    """
+    try:
+        demo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grc_system.html")
+        with open(demo_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    except FileNotFoundError:
+        return jsonify({"error": "GRC system page file not found on server."}), 404
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "CGOSTI MCP Server"})
@@ -1218,6 +1281,120 @@ def evaluate_worker_compliance(record, today=None):
         "findings": findings,
     }
 
+
+
+@app.route("/grc-cgo", methods=["POST", "OPTIONS"])
+def grc_cgo_http():
+    """
+    CGOSTI GRC — Simple (CGO) mode: Goal + Objectives only, single
+    verdict, using the Rulebook's own dynamic verdict vocabulary rather
+    than a fixed set of labels. LLM-driven, not deterministic — reliability
+    comes from prompt structure (temperature=0, explicit requirement to
+    read verdict labels from the Rulebook, explicit Rule-11-equivalent and
+    cascade handling), the same approach proven for the Adversarial tool.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"status": "ok"})
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
+
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    rulebook = (body.get("rulebook") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    if not rulebook or not subject:
+        return jsonify({"error": "Both 'rulebook' and 'subject' are required."}), 400
+
+    try:
+        cache_key = hashlib.sha256((rulebook.strip() + "||" + subject.strip() + "||cgo").encode("utf-8")).hexdigest()
+
+        if cache_key in _STRUCTURE_CACHE:
+            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
+        else:
+            if not ANTHROPIC_API_KEY:
+                return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=3072, temperature=0,
+                system=[{"type": "text", "text": SYSTEM_PROMPT_GRC_CGO, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": f"RULEBOOK:\n{rulebook}\n\nSUBJECT:\n{subject}"}]
+            )
+            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            result = json.loads(raw)
+            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+            _STRUCTURE_CACHE[cache_key] = encrypted
+
+        return jsonify(result)
+
+    except json.JSONDecodeError:
+        return jsonify({"error": "The assessment response was too long and got cut off. Try shorter input."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/grc-cgosti", methods=["POST", "OPTIONS"])
+def grc_cgosti_http():
+    """
+    CGOSTI GRC — Complex (CGOSTI) mode: full five-layer assessment, one
+    layer per call, matching the proven Adversarial Checklist pattern.
+    Dynamic verdict/dimension vocabulary, read from the Rulebook itself.
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({"status": "ok"})
+        req_origin = request.headers.get("Origin", "")
+        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+        return resp, 200
+
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    rulebook = (body.get("rulebook") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    layer = (body.get("layer") or "").strip().lower()
+
+    VALID_LAYERS = {"goal", "objectives", "strategy", "tactics", "innovations"}
+    if not rulebook or not subject:
+        return jsonify({"error": "Both 'rulebook' and 'subject' are required."}), 400
+    if layer not in VALID_LAYERS:
+        return jsonify({"error": f"'layer' must be one of: {', '.join(sorted(VALID_LAYERS))}"}), 400
+
+    try:
+        cache_key = hashlib.sha256((rulebook.strip() + "||" + subject.strip() + "||cgosti||" + layer).encode("utf-8")).hexdigest()
+
+        if cache_key in _STRUCTURE_CACHE:
+            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
+        else:
+            if not ANTHROPIC_API_KEY:
+                return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=2048, temperature=0,
+                system=[{"type": "text", "text": SYSTEM_PROMPT_GRC_CGOSTI, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": f"RULEBOOK:\n{rulebook}\n\nSUBJECT:\n{subject}\n\nLAYER TO ASSESS THIS CALL: {layer}"}]
+            )
+            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            result = json.loads(raw)
+            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+            _STRUCTURE_CACHE[cache_key] = encrypted
+
+        return jsonify(result)
+
+    except json.JSONDecodeError:
+        return jsonify({"error": "The assessment response was too long and got cut off. Try shorter input."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/adversarial-checklist", methods=["POST", "OPTIONS"])

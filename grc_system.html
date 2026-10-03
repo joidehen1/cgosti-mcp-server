@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGOSTI GRC System</title>
+<style>
+  :root {
+    --navy: #0a0a2e; --gold: #e8a838; --cyan: #00b4d8;
+    --green: #10b981; --amber: #f4a261; --red: #e63946; --purple: #9b5de5; --grey: #9ca3af;
+    --mid: #6b7a99;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0b0b10; font-family: 'Courier New', monospace; color: #ddd; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 20px 32px;
+    border-bottom: 1px solid rgba(232,168,56,0.25); background: var(--navy);
+  }
+  .cube { width: 36px; height: 36px; flex-shrink: 0; }
+  .header-title { font-size: 16px; font-weight: 900; color: var(--gold); letter-spacing: 0.08em; }
+  .header-sub { font-size: 10px; color: var(--mid); letter-spacing: 0.1em; margin-top: 2px; }
+  .badge-demo {
+    margin-left: auto; font-size: 10px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(0,180,216,0.4); padding: 6px 12px; border-radius: 6px; letter-spacing: 0.1em;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 48px 24px 100px; }
+  .tagline { font-size: 13px; color: var(--purple); font-weight: 700; line-height: 1.6; margin-bottom: 32px; }
+
+  .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .grid-two { grid-template-columns: 1fr; } }
+  .doc-panel { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 20px; }
+  .doc-panel.rulebook { border-color: rgba(0,180,216,0.3); }
+  .doc-panel.subject { border-color: rgba(232,168,56,0.3); }
+  .doc-label { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; margin-bottom: 4px; }
+  .doc-panel.rulebook .doc-label { color: var(--cyan); }
+  .doc-panel.subject .doc-label { color: var(--gold); }
+  .doc-sub { font-size: 10px; color: var(--mid); margin-bottom: 12px; }
+  textarea {
+    width: 100%; min-height: 180px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; color: #eee; font-family: 'Courier New', monospace; font-size: 12px;
+    padding: 12px; resize: vertical; outline: none; line-height: 1.6;
+  }
+  textarea:focus { border-color: rgba(199,125,255,0.5); }
+  .upload-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .upload-btn {
+    font-size: 10px; padding: 6px 12px; background: transparent; border: 1px solid rgba(255,255,255,0.2);
+    color: #aaa; border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .upload-btn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .filename { font-size: 10px; color: var(--mid); }
+
+  .mode-row { display: flex; gap: 12px; justify-content: center; margin: 28px 0; }
+  .mode-btn {
+    flex: 1; max-width: 320px; padding: 16px; border-radius: 10px; cursor: pointer; text-align: left;
+    background: rgba(255,255,255,0.03); border: 2px solid rgba(255,255,255,0.1); font-family: inherit;
+  }
+  .mode-btn.selected { border-color: var(--purple); background: rgba(155,93,229,0.08); }
+  .mode-btn .mode-title { font-size: 13px; font-weight: 700; color: var(--gold); margin-bottom: 4px; }
+  .mode-btn .mode-desc { font-size: 11px; color: #bbb; line-height: 1.5; }
+
+  .action-row { display: flex; gap: 10px; justify-content: center; margin: 20px 0; flex-wrap: wrap; }
+  .btn {
+    padding: 12px 32px; border-radius: 8px; font-weight: 700; font-size: 13px; letter-spacing: 0.08em;
+    cursor: pointer; font-family: inherit; border: none; transition: transform 0.15s, opacity 0.15s;
+    background: linear-gradient(135deg,#9b5de5,#00b4d8); color: #fff;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .status-line { text-align: center; font-size: 11px; color: var(--mid); margin-bottom: 16px; min-height: 16px; }
+  #errorBox {
+    display: none; background: rgba(230,57,70,0.1); border: 1px solid rgba(230,57,70,0.4); border-radius: 8px;
+    padding: 14px 18px; margin: 0 0 20px; font-size: 11px; color: #ffb3b8; white-space: pre-wrap; line-height: 1.6;
+  }
+
+  .pattern-tag { display: inline-block; padding: 4px 12px; border-radius: 6px; font-size: 10px; font-weight: 700; margin-bottom: 12px; }
+  .pattern-tag.compliance_style { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+  .pattern-tag.dispute_style { background: rgba(244,162,97,0.15); color: var(--amber); border: 1px solid rgba(244,162,97,0.3); }
+
+  .verdict-box { padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 2px solid; }
+  .verdict-box.pos { background: rgba(16,185,129,0.08); border-color: var(--green); }
+  .verdict-box.neg { background: rgba(230,57,70,0.08); border-color: var(--red); }
+  .verdict-box.neutral { background: rgba(192,192,192,0.08); border-color: #c0c0c0; }
+  .verdict-text { font-size: 20px; font-weight: 900; }
+
+  .findings-label { font-size: 11px; font-weight: 700; color: var(--cyan); letter-spacing: 0.1em; margin: 16px 0 10px; }
+  .finding-card { padding: 12px 16px; border-radius: 6px; margin-bottom: 8px; border-left: 4px solid; background: rgba(255,255,255,0.03); }
+  .finding-req { font-weight: 700; font-size: 12px; color: #fff; margin-bottom: 4px; }
+  .finding-verdict { font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+  .finding-detail { font-size: 12px; color: #ccc; }
+  .finding-action { font-size: 11px; color: var(--gold); margin-top: 4px; font-style: italic; }
+
+  /* CGOSTI tab mode */
+  .tab-row { display: flex; gap: 4px; margin: 20px 0 0; border-bottom: 1px solid rgba(255,255,255,0.1); flex-wrap: wrap; }
+  .tab-btn {
+    padding: 10px 18px; background: transparent; border: none; border-bottom: 3px solid transparent;
+    color: #888; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 0.04em;
+  }
+  .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .tab-panel { display: none; padding-top: 20px; }
+  .tab-panel.active { display: block; }
+
+  .summary-text { font-size: 13px; color: #ddd; line-height: 1.6; margin-bottom: 16px; }
+
+  footer { text-align: center; padding: 24px; font-size: 9px; color: #666; letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="cube" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="50,4 90,25 50,46 10,25" fill="#e8a838"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="#c9932e"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="#f6c15e"/>
+    <polygon points="50,4 90,25 50,46 10,25" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="10,25 50,46 50,96 10,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+    <polygon points="90,25 50,46 50,96 90,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
+  </svg>
+  <div>
+    <div class="header-title">CGOSTI GRC SYSTEM</div>
+    <div class="header-sub">GENERIC GOVERNANCE, RISK & COMPLIANCE — ANY RULEBOOK</div>
+  </div>
+  <div class="badge-demo">DEMO BUILD</div>
+</header>
+
+<main>
+  <div class="tagline">Evaluate any subject against any rulebook — the system reads your rulebook's own verdict vocabulary rather than assuming fixed labels.</div>
+
+  <div class="grid-two">
+    <div class="doc-panel rulebook">
+      <div class="doc-label">SOURCE — INSTRUCTION RULEBOOK</div>
+      <div class="doc-sub">Must state your verdict labels (e.g. Compliant/Non-Compliant, OK/Not OK) and the requirements behind them</div>
+      <textarea id="rulebookText" placeholder="Paste your policy or rulebook, including the verdict labels it uses..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('rulebookFile').click()">↑ UPLOAD</button>
+        <input type="file" id="rulebookFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'rulebookText')">
+        <span class="filename" id="rulebookFilename"></span>
+      </div>
+    </div>
+    <div class="doc-panel subject">
+      <div class="doc-label">SUBJECT DOCUMENT</div>
+      <div class="doc-sub">The record, case, or item being evaluated</div>
+      <textarea id="subjectText" placeholder="Paste or upload the subject..."></textarea>
+      <div class="upload-row">
+        <button class="upload-btn" onclick="document.getElementById('subjectFile').click()">↑ UPLOAD</button>
+        <input type="file" id="subjectFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'subjectText')">
+        <span class="filename" id="subjectFilename"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="mode-row">
+    <div class="mode-btn selected" id="modeCGO" onclick="selectMode('cgo')">
+      <div class="mode-title">SIMPLE VALIDATION (CGO)</div>
+      <div class="mode-desc">Goal + Objectives only. One verdict. Faster, single call.</div>
+    </div>
+    <div class="mode-btn" id="modeCGOSTI" onclick="selectMode('cgosti')">
+      <div class="mode-title">COMPLEX VALIDATION (CGOSTI)</div>
+      <div class="mode-desc">Full five-layer assessment. Tab-based, one call per layer.</div>
+    </div>
+  </div>
+
+  <div class="action-row" id="cgoActionRow">
+    <button class="btn" id="cgoBtn" onclick="runCGO()">TRANSFORM & AUDIT</button>
+  </div>
+
+  <div id="cgostiSection" style="display:none;">
+    <div class="tab-row" id="tabRow">
+      <button class="tab-btn active" data-layer="goal" onclick="switchTab('goal')">GOAL</button>
+      <button class="tab-btn" data-layer="objectives" onclick="switchTab('objectives')">OBJECTIVES</button>
+      <button class="tab-btn" data-layer="strategy" onclick="switchTab('strategy')">STRATEGY</button>
+      <button class="tab-btn" data-layer="tactics" onclick="switchTab('tactics')">TACTICS</button>
+      <button class="tab-btn" data-layer="innovations" onclick="switchTab('innovations')">INNOVATIONS</button>
+    </div>
+    <div class="tab-panel active" id="panel_goal" data-layer="goal"></div>
+    <div class="tab-panel" id="panel_objectives" data-layer="objectives"></div>
+    <div class="tab-panel" id="panel_strategy" data-layer="strategy"></div>
+    <div class="tab-panel" id="panel_tactics" data-layer="tactics"></div>
+    <div class="tab-panel" id="panel_innovations" data-layer="innovations"></div>
+  </div>
+
+  <div class="status-line" id="statusLine"></div>
+  <div id="errorBox"></div>
+
+  <div id="cgoResultArea" style="display:none;"></div>
+</main>
+
+<footer>CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026 · POWERED BY CLAUDE (ANTHROPIC)</footer>
+
+<script>
+  const API_BASE = "https://mcp.mightyunits.com";
+  let currentMode = "cgo";
+  let currentTab = "goal";
+
+  function handleFileUpload(input, targetId) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById(targetId.replace('Text','Filename')).textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById(targetId).value = e.target.result; };
+    reader.readAsText(file);
+  }
+
+  function selectMode(mode) {
+    currentMode = mode;
+    document.getElementById('modeCGO').classList.toggle('selected', mode === 'cgo');
+    document.getElementById('modeCGOSTI').classList.toggle('selected', mode === 'cgosti');
+    document.getElementById('cgoActionRow').style.display = mode === 'cgo' ? 'flex' : 'none';
+    document.getElementById('cgostiSection').style.display = mode === 'cgosti' ? 'block' : 'none';
+    document.getElementById('cgoResultArea').style.display = 'none';
+  }
+
+  function setStatus(msg) { document.getElementById('statusLine').textContent = msg; }
+  function showErrorBox(text) { var b = document.getElementById('errorBox'); b.textContent = text; b.style.display = 'block'; }
+  function hideErrorBox() { document.getElementById('errorBox').style.display = 'none'; }
+
+  function verdictBoxClass(verdict, pattern) {
+    const v = (verdict || '').toLowerCase();
+    const positive = ['compliant','ok','pass','holds','approved','yes'];
+    const negative = ['non-compliant','non compliant','not ok','fail','fracture','fractures','rejected','no'];
+    if (positive.some(p => v.includes(p))) return 'pos';
+    if (negative.some(n => v.includes(n))) return 'neg';
+    return 'neutral';
+  }
+
+  async function runCGO() {
+    const rulebook = document.getElementById('rulebookText').value.trim();
+    const subject = document.getElementById('subjectText').value.trim();
+    if (!rulebook || !subject) { setStatus('⚠ Please provide both the Rulebook and Subject.'); return; }
+
+    hideErrorBox();
+    const btn = document.getElementById('cgoBtn');
+    btn.disabled = true;
+    setStatus('Running assessment...');
+
+    try {
+      const res = await fetch(API_BASE + '/grc-cgo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rulebook, subject })
+      });
+      if (!res.ok) { showErrorBox('HTTP ' + res.status + ': ' + await res.text()); btn.disabled = false; return; }
+      const data = await res.json();
+      if (data.error) { showErrorBox('Error: ' + data.error); btn.disabled = false; return; }
+
+      renderCGOResult(data);
+      setStatus('✅ Assessment complete.');
+    } catch (e) {
+      showErrorBox(e.name + ': ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderCGOResult(data) {
+    const vClass = verdictBoxClass(data.overall_verdict, data.rulebook_pattern);
+    let html = `<div class="pattern-tag ${data.rulebook_pattern}">${data.rulebook_pattern === 'dispute_style' ? '⚠ DISPUTE-STYLE — STRUCTURAL READ, NOT CONFIRMED VALIDATION' : '✓ COMPLIANCE-STYLE'}</div>`;
+    html += `<div class="verdict-box ${vClass}"><div class="verdict-text">${data.overall_verdict || 'N/A'}</div></div>`;
+    html += `<div class="summary-text">${data.summary || ''}</div>`;
+    html += `<div class="findings-label">FINDINGS</div>`;
+    (data.findings || []).forEach(f => {
+      const fClass = verdictBoxClass(f.verdict);
+      const borderColor = fClass === 'pos' ? 'var(--green)' : fClass === 'neg' ? 'var(--red)' : '#c0c0c0';
+      html += `<div class="finding-card" style="border-left-color:${borderColor}">
+        <div class="finding-req">${f.requirement}</div>
+        <div class="finding-verdict" style="color:${borderColor}">${f.verdict}</div>
+        <div class="finding-detail">${f.evidence || ''} — ${f.reason || ''}</div>
+        ${f.required_action ? `<div class="finding-action">→ ${f.required_action}</div>` : ''}
+      </div>`;
+    });
+    const area = document.getElementById('cgoResultArea');
+    area.innerHTML = html;
+    area.style.display = 'block';
+  }
+
+  function switchTab(layer) {
+    currentTab = layer;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.layer === layer));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.dataset.layer === layer));
+    if (!document.getElementById('panel_' + layer).dataset.rendered) {
+      renderCGOSTITabInitial(layer);
+    }
+  }
+
+  function renderCGOSTITabInitial(layer) {
+    const panel = document.getElementById('panel_' + layer);
+    panel.innerHTML = `
+      <div class="action-row">
+        <button class="btn" onclick="runCGOSTILayer('${layer}')" id="btn_${layer}">RUN ${layer.toUpperCase()}</button>
+      </div>
+      <div class="status-line" id="status_line_${layer}"></div>
+    `;
+  }
+
+  async function runCGOSTILayer(layer) {
+    const rulebook = document.getElementById('rulebookText').value.trim();
+    const subject = document.getElementById('subjectText').value.trim();
+    if (!rulebook || !subject) {
+      document.getElementById('status_line_' + layer).textContent = '⚠ Please provide both the Rulebook and Subject.';
+      return;
+    }
+
+    const btn = document.getElementById('btn_' + layer);
+    btn.disabled = true;
+    document.getElementById('status_line_' + layer).textContent = 'Running ' + layer + '...';
+
+    try {
+      const res = await fetch(API_BASE + '/grc-cgosti', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rulebook, subject, layer })
+      });
+      if (!res.ok) {
+        document.getElementById('status_line_' + layer).textContent = 'Error: HTTP ' + res.status;
+        btn.disabled = false;
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById('status_line_' + layer).textContent = 'Error: ' + data.error;
+        btn.disabled = false;
+        return;
+      }
+
+      renderCGOSTITabResult(layer, data);
+      document.getElementById('panel_' + layer).dataset.rendered = 'true';
+      document.getElementById('status_line_' + layer).textContent = '✅ Complete.';
+    } catch (e) {
+      document.getElementById('status_line_' + layer).textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderCGOSTITabResult(layer, data) {
+    const panel = document.getElementById('panel_' + layer);
+    let html = `<div class="pattern-tag ${data.rulebook_pattern}">${data.rulebook_pattern === 'dispute_style' ? '⚠ DISPUTE-STYLE — STRUCTURAL READ' : '✓ COMPLIANCE-STYLE'}</div>`;
+    html += `<div class="summary-text">${data.layer_note || ''}</div>`;
+    html += `<div class="findings-label">${layer.toUpperCase()} — ALL DIMENSIONS</div>`;
+    (data.cells || []).forEach(c => {
+      const vClass = verdictBoxClass(c.verdict);
+      const borderColor = vClass === 'pos' ? 'var(--green)' : vClass === 'neg' ? 'var(--red)' : '#c0c0c0';
+      html += `<div class="finding-card" style="border-left-color:${borderColor}">
+        <div class="finding-req">${c.dimension}</div>
+        <div class="finding-verdict" style="color:${borderColor}">${c.verdict}</div>
+        <div class="finding-detail">${c.detail}</div>
+      </div>`;
+    });
+    panel.innerHTML = html;
+  }
+
+  switchTab('goal');
+</script>
+
+</body>
+</html>
