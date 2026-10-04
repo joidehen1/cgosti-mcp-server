@@ -49,7 +49,15 @@
   .upload-btn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
   .filename { font-size: 10px; color: var(--mid); }
 
-  .mode-row { display: flex; gap: 12px; justify-content: center; margin: 28px 0; }
+  .eval-row { display: flex; align-items: center; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 4px 0 8px; }
+  .eval-row label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--gold); }
+  .eval-row input[type=date] {
+    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #eee;
+    font-family: inherit; font-size: 12px; padding: 6px 10px; color-scheme: dark;
+  }
+  .eval-hint { font-size: 10px; color: var(--mid); }
+
+  .mode-row { display: flex; gap: 12px; justify-content: center; margin: 20px 0 28px; }
   .mode-btn {
     flex: 1; max-width: 320px; padding: 16px; border-radius: 10px; cursor: pointer; text-align: left;
     background: rgba(255,255,255,0.03); border: 2px solid rgba(255,255,255,0.1); font-family: inherit;
@@ -77,9 +85,18 @@
   .pattern-tag.compliance_style { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
   .pattern-tag.dispute_style { background: rgba(244,162,97,0.15); color: var(--amber); border: 1px solid rgba(244,162,97,0.3); }
 
+  .meta-line { font-size: 10px; color: var(--mid); margin: 0 0 12px; line-height: 1.6; }
+  .warn-banner {
+    background: rgba(230,57,70,0.12); border: 2px solid var(--red); border-radius: 8px;
+    padding: 14px 18px; margin: 0 0 16px; font-size: 12px; color: #ffd0d4; line-height: 1.6;
+  }
+  .warn-banner strong { color: #fff; }
+  .warn-banner ul { margin: 8px 0 0 18px; padding: 0; font-size: 11px; }
+
   .verdict-box { padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 2px solid; }
   .verdict-box.pos { background: rgba(16,185,129,0.08); border-color: var(--green); }
   .verdict-box.neg { background: rgba(230,57,70,0.08); border-color: var(--red); }
+  .verdict-box.warn { background: rgba(244,162,97,0.08); border-color: var(--amber); }
   .verdict-box.neutral { background: rgba(192,192,192,0.08); border-color: #c0c0c0; }
   .verdict-text { font-size: 20px; font-weight: 900; }
 
@@ -90,7 +107,6 @@
   .finding-detail { font-size: 12px; color: #ccc; }
   .finding-action { font-size: 11px; color: var(--gold); margin-top: 4px; font-style: italic; }
 
-  /* CGOSTI tab mode */
   .tab-row { display: flex; gap: 4px; margin: 20px 0 0; border-bottom: 1px solid rgba(255,255,255,0.1); flex-wrap: wrap; }
   .tab-btn {
     padding: 10px 18px; background: transparent; border: none; border-bottom: 3px solid transparent;
@@ -149,6 +165,12 @@
     </div>
   </div>
 
+  <div class="eval-row">
+    <label for="evalDate">EVALUATION DATE</label>
+    <input type="date" id="evalDate">
+    <span class="eval-hint">Defaults to today · used for every expiry and time-window rule</span>
+  </div>
+
   <div class="mode-row">
     <div class="mode-btn selected" id="modeCGO" onclick="selectMode('cgo')">
       <div class="mode-title">SIMPLE VALIDATION (CGO)</div>
@@ -192,6 +214,51 @@
   let currentMode = "cgo";
   let currentTab = "goal";
 
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function todayLocalISO() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // Colour = severity, consistent with the other CGOSTI tools:
+  // green holds/compliant · red fails · amber partial/action required · silver ambiguous/exception.
+  // Negative patterns are checked FIRST so "Non-Compliant" / "Not OK" can never read as positive.
+  function verdictClass(verdict) {
+    const v = String(verdict == null ? '' : verdict).toLowerCase().replace(/_/g, ' ').trim();
+    if (!v) return 'neutral';
+    if (/\bnon[\s-]?complian(?:t|ce)\b|\bnot\s+(?:ok|okay|compliant|approved|met|valid|passed)\b|\bfail|fractur|reject|breach|unacceptable/.test(v)) return 'neg';
+    if (/action required|expiring|partial|caution|conditional|warning/.test(v)) return 'warn';
+    if (/\bcompliant\b|\bok(?:ay)?\b|\bpass(?:ed)?\b|\bholds?\b|\bapproved\b|\bmet\b|\byes\b|\bvalid\b|\bacceptable\b/.test(v)) return 'pos';
+    return 'neutral';
+  }
+  function classColor(cls) {
+    return cls === 'pos' ? 'var(--green)' : cls === 'neg' ? 'var(--red)' : cls === 'warn' ? 'var(--amber)' : '#c0c0c0';
+  }
+
+  function metaHtml(data) {
+    let html = '';
+    if (data.evaluation_date_used) {
+      html += 'Evaluation date used: ' + esc(data.evaluation_date_used);
+    }
+    if (data.ignored_test_metadata_fields && data.ignored_test_metadata_fields.length) {
+      html += (html ? ' · ' : '') + 'Ignored as non-evidence (answer-key fields): ' + data.ignored_test_metadata_fields.map(esc).join(', ');
+    }
+    return html ? '<div class="meta-line">' + html + '</div>' : '';
+  }
+
+  function warningHtml(data) {
+    const w = data.consistency_warnings;
+    if (!w || !w.length) return '';
+    return '<div class="warn-banner"><strong>⚠ INCONSISTENT RESULT — do not rely on this output.</strong> ' +
+      'The verdict, findings and summary disagree with each other, even after an automatic re-check. Re-run it or review it manually.' +
+      '<ul>' + w.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+  }
+
   function handleFileUpload(input, targetId) {
     const file = input.files[0];
     if (!file) return;
@@ -214,19 +281,18 @@
   function showErrorBox(text) { var b = document.getElementById('errorBox'); b.textContent = text; b.style.display = 'block'; }
   function hideErrorBox() { document.getElementById('errorBox').style.display = 'none'; }
 
-  function verdictBoxClass(verdict, pattern) {
-    const v = (verdict || '').toLowerCase();
-    const positive = ['compliant','ok','pass','holds','approved','yes'];
-    const negative = ['non-compliant','non compliant','not ok','fail','fracture','fractures','rejected','no'];
-    if (positive.some(p => v.includes(p))) return 'pos';
-    if (negative.some(n => v.includes(n))) return 'neg';
-    return 'neutral';
+  function readInputs() {
+    return {
+      rulebook: document.getElementById('rulebookText').value.trim(),
+      subject: document.getElementById('subjectText').value.trim(),
+      evaluation_date: document.getElementById('evalDate').value
+    };
   }
 
   async function runCGO() {
-    const rulebook = document.getElementById('rulebookText').value.trim();
-    const subject = document.getElementById('subjectText').value.trim();
-    if (!rulebook || !subject) { setStatus('⚠ Please provide both the Rulebook and Subject.'); return; }
+    const inputs = readInputs();
+    if (!inputs.rulebook || !inputs.subject) { setStatus('⚠ Please provide both the Rulebook and Subject.'); return; }
+    if (!inputs.evaluation_date) { setStatus('⚠ Please set the evaluation date.'); return; }
 
     hideErrorBox();
     const btn = document.getElementById('cgoBtn');
@@ -236,14 +302,14 @@
     try {
       const res = await fetch(API_BASE + '/grc-cgo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rulebook, subject })
+        body: JSON.stringify(inputs)
       });
       if (!res.ok) { showErrorBox('HTTP ' + res.status + ': ' + await res.text()); btn.disabled = false; return; }
       const data = await res.json();
       if (data.error) { showErrorBox('Error: ' + data.error); btn.disabled = false; return; }
 
       renderCGOResult(data);
-      setStatus('✅ Assessment complete.');
+      setStatus(data.consistency_warnings && data.consistency_warnings.length ? '⚠ Assessment returned, but failed the consistency check.' : '✅ Assessment complete.');
     } catch (e) {
       showErrorBox(e.name + ': ' + e.message);
     } finally {
@@ -252,20 +318,25 @@
   }
 
   function renderCGOResult(data) {
-    const vClass = verdictBoxClass(data.overall_verdict, data.rulebook_pattern);
-    let html = `<div class="pattern-tag ${data.rulebook_pattern}">${data.rulebook_pattern === 'dispute_style' ? '⚠ DISPUTE-STYLE — STRUCTURAL READ, NOT CONFIRMED VALIDATION' : '✓ COMPLIANCE-STYLE'}</div>`;
-    html += `<div class="verdict-box ${vClass}"><div class="verdict-text">${data.overall_verdict || 'N/A'}</div></div>`;
-    html += `<div class="summary-text">${data.summary || ''}</div>`;
-    html += `<div class="findings-label">FINDINGS</div>`;
-    (data.findings || []).forEach(f => {
-      const fClass = verdictBoxClass(f.verdict);
-      const borderColor = fClass === 'pos' ? 'var(--green)' : fClass === 'neg' ? 'var(--red)' : '#c0c0c0';
-      html += `<div class="finding-card" style="border-left-color:${borderColor}">
-        <div class="finding-req">${f.requirement}</div>
-        <div class="finding-verdict" style="color:${borderColor}">${f.verdict}</div>
-        <div class="finding-detail">${f.evidence || ''} — ${f.reason || ''}</div>
-        ${f.required_action ? `<div class="finding-action">→ ${f.required_action}</div>` : ''}
-      </div>`;
+    const vClass = verdictClass(data.overall_verdict);
+    let html = warningHtml(data);
+    html += '<div class="pattern-tag ' + esc(data.rulebook_pattern) + '">' +
+      (data.rulebook_pattern === 'dispute_style' ? '⚠ DISPUTE-STYLE — STRUCTURAL READ, NOT CONFIRMED VALIDATION' : '✓ COMPLIANCE-STYLE') + '</div>';
+    html += metaHtml(data);
+    html += '<div class="verdict-box ' + vClass + '"><div class="verdict-text">' + esc(data.overall_verdict || 'N/A') + '</div></div>';
+    html += '<div class="summary-text">' + esc(data.summary || '') + '</div>';
+    if (data.verdict_derivation) {
+      html += '<div class="meta-line">How the verdict was reached: ' + esc(data.verdict_derivation) + '</div>';
+    }
+    html += '<div class="findings-label">FINDINGS</div>';
+    (data.findings || []).forEach(function (f) {
+      const color = classColor(verdictClass(f.verdict));
+      html += '<div class="finding-card" style="border-left-color:' + color + '">' +
+        '<div class="finding-req">' + esc(f.requirement) + '</div>' +
+        '<div class="finding-verdict" style="color:' + color + '">' + esc(f.verdict) + '</div>' +
+        '<div class="finding-detail">' + esc(f.evidence || '') + ' — ' + esc(f.reason || '') + '</div>' +
+        (f.required_action ? '<div class="finding-action">→ ' + esc(f.required_action) + '</div>' : '') +
+        '</div>';
     });
     const area = document.getElementById('cgoResultArea');
     area.innerHTML = html;
@@ -283,19 +354,19 @@
 
   function renderCGOSTITabInitial(layer) {
     const panel = document.getElementById('panel_' + layer);
-    panel.innerHTML = `
-      <div class="action-row">
-        <button class="btn" onclick="runCGOSTILayer('${layer}')" id="btn_${layer}">RUN ${layer.toUpperCase()}</button>
-      </div>
-      <div class="status-line" id="status_line_${layer}"></div>
-    `;
+    panel.innerHTML =
+      '<div class="action-row"><button class="btn" onclick="runCGOSTILayer(\'' + layer + '\')" id="btn_' + layer + '">RUN ' + layer.toUpperCase() + '</button></div>' +
+      '<div class="status-line" id="status_line_' + layer + '"></div>';
   }
 
   async function runCGOSTILayer(layer) {
-    const rulebook = document.getElementById('rulebookText').value.trim();
-    const subject = document.getElementById('subjectText').value.trim();
-    if (!rulebook || !subject) {
+    const inputs = readInputs();
+    if (!inputs.rulebook || !inputs.subject) {
       document.getElementById('status_line_' + layer).textContent = '⚠ Please provide both the Rulebook and Subject.';
+      return;
+    }
+    if (!inputs.evaluation_date) {
+      document.getElementById('status_line_' + layer).textContent = '⚠ Please set the evaluation date.';
       return;
     }
 
@@ -306,7 +377,7 @@
     try {
       const res = await fetch(API_BASE + '/grc-cgosti', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rulebook, subject, layer })
+        body: JSON.stringify(Object.assign({}, inputs, { layer: layer }))
       });
       if (!res.ok) {
         document.getElementById('status_line_' + layer).textContent = 'Error: HTTP ' + res.status;
@@ -322,7 +393,6 @@
 
       renderCGOSTITabResult(layer, data);
       document.getElementById('panel_' + layer).dataset.rendered = 'true';
-      document.getElementById('status_line_' + layer).textContent = '✅ Complete.';
     } catch (e) {
       document.getElementById('status_line_' + layer).textContent = e.message;
     } finally {
@@ -332,21 +402,22 @@
 
   function renderCGOSTITabResult(layer, data) {
     const panel = document.getElementById('panel_' + layer);
-    let html = `<div class="pattern-tag ${data.rulebook_pattern}">${data.rulebook_pattern === 'dispute_style' ? '⚠ DISPUTE-STYLE — STRUCTURAL READ' : '✓ COMPLIANCE-STYLE'}</div>`;
-    html += `<div class="summary-text">${data.layer_note || ''}</div>`;
-    html += `<div class="findings-label">${layer.toUpperCase()} — ALL DIMENSIONS</div>`;
-    (data.cells || []).forEach(c => {
-      const vClass = verdictBoxClass(c.verdict);
-      const borderColor = vClass === 'pos' ? 'var(--green)' : vClass === 'neg' ? 'var(--red)' : '#c0c0c0';
-      html += `<div class="finding-card" style="border-left-color:${borderColor}">
-        <div class="finding-req">${c.dimension}</div>
-        <div class="finding-verdict" style="color:${borderColor}">${c.verdict}</div>
-        <div class="finding-detail">${c.detail}</div>
-      </div>`;
+    let html = '<div class="pattern-tag ' + esc(data.rulebook_pattern) + '">' +
+      (data.rulebook_pattern === 'dispute_style' ? '⚠ DISPUTE-STYLE — STRUCTURAL READ' : '✓ COMPLIANCE-STYLE') + '</div>';
+    html += metaHtml(data);
+    html += '<div class="summary-text">' + esc(data.layer_note || '') + '</div>';
+    html += '<div class="findings-label">' + esc(layer.toUpperCase()) + ' — ALL DIMENSIONS</div>';
+    (data.cells || []).forEach(function (c) {
+      const color = classColor(verdictClass(c.verdict));
+      html += '<div class="finding-card" style="border-left-color:' + color + '">' +
+        '<div class="finding-req">' + esc(c.dimension) + '</div>' +
+        '<div class="finding-verdict" style="color:' + color + '">' + esc(c.verdict) + '</div>' +
+        '<div class="finding-detail">' + esc(c.detail) + '</div></div>';
     });
     panel.innerHTML = html;
   }
 
+  document.getElementById('evalDate').value = todayLocalISO();
   switchTab('goal');
 </script>
 

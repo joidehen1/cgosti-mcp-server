@@ -16,7 +16,8 @@ Deployed independently from the CGOSTI Transformer app.
 import os
 import json
 import hashlib
-from datetime import date
+import re
+from datetime import date, datetime, timezone
 import requests
 import anthropic
 from concurrent.futures import ThreadPoolExecutor
@@ -239,35 +240,51 @@ Keys: goal (string), objectives (array), strategy (string), tactics (array), inn
 Do NOT generate innovation_ai in this call. It will be requested separately."""
 
 
+GRC_SHARED_RULES = """
+EVALUATION DATE — the user message states an EVALUATION DATE. That is today's date for this assessment. Use it for every time-based rule (expiry windows, overdue items, "within N days"). Never assume, substitute or infer any other date as "today", and never rely on your own sense of the current date.
+
+DATE ARITHMETIC — the user message also contains a DATE REFERENCE TABLE, computed by the server, giving for each YYYY-MM-DD date found in the Subject the exact number of calendar days between that date and the evaluation date (negative means the date is already in the past). Use those figures exactly as given; do not recompute them. When a date drives a verdict, cite the figure in your reason (for example: "expiry 2026-09-03 is 30 days in the past"). If a date in the Subject is not in the table (for example because it uses another format), compute the difference yourself from the evaluation date and show the calculation.
+
+TEST / ANSWER-KEY METADATA — a Subject may contain fields that exist only for demos or QA and are not evidence about the Subject (for example fields whose names begin with "expected_outcome", "expected_verdict" or "answer_key", or contain "controller_only" or "demo_only"). The server removes the common ones, but if any remain, ignore them completely: do not treat them as evidence, do not try to reconcile the real data against them, and do not mention them in findings or summary.
+"""
+
 SYSTEM_PROMPT_GRC_CGO = """You are the CGOSTI GRC Assessor (Simple / CGO mode), built for Mighty Units Ltd.
 
-You are given a RULEBOOK (a user's own governance, risk, or compliance policy) and a SUBJECT document to evaluate against it.
-
+You are given a RULEBOOK (a user's own governance, risk, or compliance policy), a SUBJECT document to evaluate against it, an EVALUATION DATE, and a DATE REFERENCE TABLE.
+""" + GRC_SHARED_RULES + """
 CRITICAL — DYNAMIC VERDICT VOCABULARY: the Rulebook itself defines its own verdict labels (e.g. "Compliant/Non-Compliant" for one user, "OK/Not OK" for another, "Pass/Fail" for a third). You MUST read the Rulebook to find its stated verdict labels and the Objectives/requirements that lead to each one. Never assume a fixed vocabulary of your own. If the Rulebook does not clearly state its verdict labels, say so explicitly rather than inventing labels.
 
 Your task: evaluate the Subject against the Rulebook's own Goal and Objectives (not Strategy, Tactics, or Innovations — CGO mode is Goal + Objectives only), applying the same rigour as a deterministic system, including:
 
 1. MISSING EVIDENCE — if a required item is absent, that is a failing verdict for that requirement.
-2. EXPIRY/TIME WINDOWS — if the Rulebook defines a time-based rule (e.g. an item expiring within a stated window counts as a different, intermediate verdict), apply it using real date comparison against the evaluation date.
+2. EXPIRY/TIME WINDOWS — if the Rulebook defines a time-based rule (e.g. an item expiring within a stated window counts as a different, intermediate verdict), apply it using the evaluation date and the DATE REFERENCE TABLE.
 3. CONDITIONAL REQUIREMENTS — if the Rulebook states a requirement only applies under certain conditions (e.g. "X is required only when Y is true"), check that condition before applying the requirement.
-4. DATA-QUALITY CONTRADICTIONS (equivalent to Rule 11) — if a field's stated status contradicts another fact about the same field (e.g. marked "valid" but a date shows it has already lapsed), this is NOT the same as a simple fail — flag it as a distinct exception state requiring human review, using whatever vocabulary the Rulebook provides for this, or stating explicitly that this is a data-quality contradiction if the Rulebook has no specific label for it.
+4. DATA-QUALITY CONTRADICTIONS (equivalent to Rule 11) — if a field's stated status contradicts another fact about the same field (e.g. marked "valid" but the DATE REFERENCE TABLE shows its expiry date is already in the past), this is NOT the same as a simple fail — flag it as a distinct exception state requiring human review, using whatever vocabulary the Rulebook provides for this, or stating explicitly that this is a data-quality contradiction if the Rulebook has no specific label for it.
 5. CASCADE EFFECTS — if one requirement's ambiguity or contradiction means another, dependent requirement cannot be independently verified, the dependent requirement should inherit the same exception state, with the reasoning stated explicitly (why the dependency exists).
 
 PATTERN RECOGNITION FOR FRAMING: assess whether this Rulebook more closely resembles a deterministic compliance policy (fixed requirements, clear pass/fail-style criteria, similar in spirit to a field-worker compliance standard) or an adversarial/dispute context (two competing parties, a claim being contested, similar in spirit to a legal or regulatory dispute). State which pattern the Rulebook resembles, and frame your confidence language accordingly — compliance-style rulebooks can be stated with direct confidence in the verdict reached; dispute-style rulebooks should be framed as a structural read, not a confirmed or outcome-validated judgement.
 
+CONSISTENCY RULES — your answer must be internally consistent:
+(1) Work out the findings first, then derive the overall verdict from them using the Rulebook's own aggregation rule.
+(2) overall_verdict must be exactly one of verdict_labels_found, written as the Rulebook writes it.
+(3) triggering_requirements must name the requirement(s) whose finding determines the overall verdict, and each such finding's verdict must be the same label as overall_verdict (unless the Rulebook explicitly defines separate per-requirement and overall vocabularies, which you must then state in verdict_derivation).
+(4) The summary must state the same overall verdict as overall_verdict and must not introduce a different one.
+(5) Before returning, check rules 1-4 and correct anything inconsistent.
+
 Return ONLY valid JSON. No markdown. No backticks.
-Keys:
+Keys, in this order:
   verdict_labels_found (array of strings — the verdict labels you identified in the Rulebook, in the Rulebook's own words),
   rulebook_pattern (string — "compliance_style" or "dispute_style", per the pattern recognition above),
-  overall_verdict (string — using one of the Rulebook's own verdict labels),
-  triggering_requirements (array of strings — which specific requirement(s) drove the verdict),
   findings (array of objects, each with: requirement [string], evidence [string — what was found for this requirement], verdict [string — using the Rulebook's own vocabulary], reason [string], required_action [string or null]),
-  summary (string — one paragraph overview, framed per the rulebook_pattern determination)."""
+  triggering_requirements (array of strings — which specific requirement(s) drove the overall verdict),
+  overall_verdict (string — exactly one of the Rulebook's own verdict labels),
+  verdict_derivation (string — the Rulebook rule that turns the findings into the overall verdict, and which finding(s) it was applied to),
+  summary (string — one paragraph overview, framed per the rulebook_pattern determination, stating the same overall verdict)."""
 
 SYSTEM_PROMPT_GRC_CGOSTI = """You are the CGOSTI GRC Assessor (Complex / CGOSTI mode), built for Mighty Units Ltd.
 
-You are given a RULEBOOK (a user's own governance, risk, or compliance policy) and a SUBJECT document, plus ONE SPECIFIC CGOSTI LAYER to assess this call (Goal, Objectives, Strategy, Tactics, or Innovations) — matching the tab-based, per-layer method already proven for adversarial case assessment.
-
+You are given a RULEBOOK (a user's own governance, risk, or compliance policy), a SUBJECT document, an EVALUATION DATE, a DATE REFERENCE TABLE, plus ONE SPECIFIC CGOSTI LAYER to assess this call (Goal, Objectives, Strategy, Tactics, or Innovations) — matching the tab-based, per-layer method already proven for adversarial case assessment.
+""" + GRC_SHARED_RULES + """
 CRITICAL — DYNAMIC VERDICT VOCABULARY: the Rulebook defines its own verdict labels — read them from the Rulebook itself, do not assume a fixed vocabulary. If the Rulebook does not clearly state its verdict labels or the pressure/risk dimensions it wants assessed, say so explicitly.
 
 Your task: for the ONE specified layer, evaluate the Subject against whatever risk or pressure dimensions the Rulebook defines (if the Rulebook does not define its own dimensions, fall back to the four general dimensions: Resource Constraints, Jurisdiction Conflicts, Information Gaps, Adversarial Intent), producing a severity verdict per dimension, using the Rulebook's own vocabulary where it provides one.
@@ -1283,54 +1300,244 @@ def evaluate_worker_compliance(record, today=None):
 
 
 
+# ---------------------------------------------------------------------------
+# CGOSTI GRC helpers: evaluation date, test-metadata stripping, consistency
+# ---------------------------------------------------------------------------
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def _is_test_metadata_key(key):
+    """True for demo/QA answer-key fields (e.g. expected_outcome_for_controller_only).
+    Token-based on purpose, so legitimate fields such as expected_delivery_date or
+    information_for_demographics are NOT treated as test metadata."""
+    toks = [t for t in re.split(r"[^a-z0-9]+", str(key).lower()) if t]
+
+    def has(*seq):
+        n = len(seq)
+        return any(tuple(toks[i:i + n]) == seq for i in range(len(toks) - n + 1))
+
+    if toks[:2] in (["expected", "outcome"], ["expected", "verdict"], ["expected", "result"]):
+        return True
+    return (has("controller", "only") or has("demo", "only") or has("for", "demo")
+            or has("answer", "key") or has("test", "note") or has("test", "notes"))
+
+
+def _strip_test_metadata(subject_text):
+    """If the Subject is JSON, remove answer-key fields before the model sees it.
+    Returns (cleaned_text, removed_field_names). Non-JSON subjects pass through
+    unchanged (the prompt tells the model to ignore such fields)."""
+    removed = []
+    try:
+        data = json.loads(subject_text)
+    except (ValueError, TypeError):
+        return subject_text, removed
+
+    def clean(node):
+        if isinstance(node, dict):
+            out = {}
+            for k, v in node.items():
+                if _is_test_metadata_key(k):
+                    removed.append(k)
+                    continue
+                out[k] = clean(v)
+            return out
+        if isinstance(node, list):
+            return [clean(i) for i in node]
+        return node
+
+    cleaned = clean(data)
+    if not removed:
+        return subject_text, removed
+    return json.dumps(cleaned, indent=2, ensure_ascii=False), removed
+
+
+def _build_date_reference(text, eval_date):
+    """Server-side date arithmetic: for every YYYY-MM-DD date in the Subject, the
+    exact calendar-day difference from the evaluation date."""
+    seen = {}
+    for m in _ISO_DATE_RE.finditer(text):
+        raw = m.group(0)
+        if raw in seen:
+            continue
+        try:
+            d = datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        seen[raw] = (d - eval_date).days
+    if not seen:
+        return "(no YYYY-MM-DD dates found in the Subject)"
+    lines = []
+    for raw, delta in sorted(seen.items()):
+        if delta < 0:
+            rel = f"{-delta} days in the past"
+        elif delta == 0:
+            rel = "today"
+        else:
+            rel = f"{delta} days in the future"
+        lines.append(f"- {raw}: {rel} (difference {delta:+d} days from the evaluation date)")
+    return "\n".join(lines)
+
+
+def _grc_prepare_inputs(body):
+    """Shared input handling for both GRC routes. Returns (ctx, None) or (None, error_response)."""
+    rulebook = (body.get("rulebook") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    if not rulebook or not subject:
+        return None, (jsonify({"error": "Both 'rulebook' and 'subject' are required."}), 400)
+    raw_date = str(body.get("evaluation_date") or "").strip()
+    if raw_date:
+        try:
+            eval_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except ValueError:
+            return None, (jsonify({"error": "'evaluation_date' must be a valid date in YYYY-MM-DD format."}), 400)
+    else:
+        eval_date = datetime.now(timezone.utc).date()
+    subject_clean, removed = _strip_test_metadata(subject)
+    return {
+        "rulebook": rulebook,
+        "subject": subject_clean,
+        "removed": removed,
+        "eval_date": eval_date,
+        "date_table": _build_date_reference(subject_clean, eval_date),
+    }, None
+
+
+def _grc_user_message(ctx, extra=""):
+    return (
+        f"EVALUATION DATE (today for this assessment): {ctx['eval_date'].isoformat()}\n\n"
+        f"DATE REFERENCE TABLE (computed by the server, relative to the evaluation date):\n{ctx['date_table']}\n\n"
+        f"RULEBOOK:\n{ctx['rulebook']}\n\nSUBJECT:\n{ctx['subject']}{extra}"
+    )
+
+
+def _grc_model_call(system_prompt, messages, max_tokens):
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=max_tokens, temperature=0,
+        system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+        messages=messages,
+    )
+    raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("The assessment did not return a JSON object.")
+    return raw, parsed
+
+
+def _grc_cache_get(key):
+    blob = _STRUCTURE_CACHE.get(key)
+    if blob is None:
+        return None
+    return json.loads(_fernet.decrypt(blob).decode("utf-8"))
+
+
+def _grc_cache_put(key, result):
+    _STRUCTURE_CACHE[key] = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+
+
+def _norm_label(s):
+    return re.sub(r"[\s_\-]+", " ", str(s or "").strip().lower())
+
+
+def _grc_cgo_consistency_issues(result):
+    """Detects the 'two verdicts in one response' failure: overall verdict vs the
+    rulebook's labels, vs the requirement(s) that triggered it, vs the summary."""
+    issues = []
+    labels = {_norm_label(l) for l in (result.get("verdict_labels_found") or []) if l}
+    overall = _norm_label(result.get("overall_verdict"))
+    if not overall:
+        return ["overall_verdict is missing."]
+    if labels and overall not in labels:
+        issues.append(f"overall_verdict '{result.get('overall_verdict')}' is not one of the Rulebook's verdict labels found ({', '.join(sorted(labels))}).")
+
+    by_req = {_norm_label(f.get("requirement")): f for f in (result.get("findings") or []) if isinstance(f, dict)}
+    for t in (result.get("triggering_requirements") or []):
+        tn = _norm_label(t)
+        match = by_req.get(tn)
+        if match is None:
+            for k, f in by_req.items():
+                if k and tn and (k in tn or tn in k):
+                    match = f
+                    break
+        if match is None:
+            continue
+        fv = _norm_label(match.get("verdict"))
+        if labels and fv in labels and overall in labels and fv != overall:
+            issues.append(f"triggering requirement '{t}' has verdict '{match.get('verdict')}' but overall_verdict is '{result.get('overall_verdict')}'.")
+
+    summary = _norm_label(result.get("summary"))
+    if summary and overall not in summary:
+        others = [l for l in labels if l != overall and l in summary]
+        if others:
+            issues.append(f"the summary refers to '{others[0]}' but does not state the overall verdict '{result.get('overall_verdict')}'.")
+    return issues
+
+
+def _grc_options_response():
+    resp = jsonify({"status": "ok"})
+    req_origin = request.headers.get("Origin", "")
+    resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Max-Age"] = "3600"
+    return resp, 200
+
+
 @app.route("/grc-cgo", methods=["POST", "OPTIONS"])
 def grc_cgo_http():
     """
-    CGOSTI GRC — Simple (CGO) mode: Goal + Objectives only, single
-    verdict, using the Rulebook's own dynamic verdict vocabulary rather
-    than a fixed set of labels. LLM-driven, not deterministic — reliability
-    comes from prompt structure (temperature=0, explicit requirement to
-    read verdict labels from the Rulebook, explicit Rule-11-equivalent and
-    cascade handling), the same approach proven for the Adversarial tool.
+    CGOSTI GRC — Simple (CGO) mode: Goal + Objectives only, single verdict,
+    using the Rulebook's own dynamic verdict vocabulary. LLM-driven, not
+    deterministic. Reliability measures: temperature=0; explicit evaluation
+    date and server-computed date arithmetic; answer-key fields stripped from
+    the Subject; server-side consistency check with one corrective retry and a
+    visible warning (never a silent contradiction) if it still fails.
     """
     if request.method == "OPTIONS":
-        resp = jsonify({"status": "ok"})
-        req_origin = request.headers.get("Origin", "")
-        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        resp.headers["Access-Control-Max-Age"] = "3600"
-        return resp, 200
+        return _grc_options_response()
 
     body = request.get_json()
     if not body:
         return jsonify({"error": "Invalid JSON"}), 400
-
-    rulebook = (body.get("rulebook") or "").strip()
-    subject = (body.get("subject") or "").strip()
-    if not rulebook or not subject:
-        return jsonify({"error": "Both 'rulebook' and 'subject' are required."}), 400
+    ctx, err = _grc_prepare_inputs(body)
+    if err:
+        return err
 
     try:
-        cache_key = hashlib.sha256((rulebook.strip() + "||" + subject.strip() + "||cgo").encode("utf-8")).hexdigest()
+        cache_key = hashlib.sha256("||".join(
+            [ctx["rulebook"], ctx["subject"], ctx["eval_date"].isoformat(), "cgo"]).encode("utf-8")).hexdigest()
+        cached = _grc_cache_get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+        if not ANTHROPIC_API_KEY:
+            return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
 
-        if cache_key in _STRUCTURE_CACHE:
-            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
-            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
-        else:
-            if not ANTHROPIC_API_KEY:
-                return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
-            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg = client.messages.create(
-                model="claude-sonnet-4-6", max_tokens=3072, temperature=0,
-                system=[{"type": "text", "text": SYSTEM_PROMPT_GRC_CGO, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": f"RULEBOOK:\n{rulebook}\n\nSUBJECT:\n{subject}"}]
+        base_messages = [{"role": "user", "content": _grc_user_message(ctx)}]
+        raw, result = _grc_model_call(SYSTEM_PROMPT_GRC_CGO, base_messages, 3072)
+        issues = _grc_cgo_consistency_issues(result)
+        if issues:
+            correction = (
+                "CONSISTENCY CORRECTION REQUIRED. Your previous answer was internally inconsistent:\n- "
+                + "\n- ".join(issues)
+                + "\nRe-evaluate carefully using the EVALUATION DATE and the DATE REFERENCE TABLE, then return the full JSON again, "
+                  "fully consistent, following the CONSISTENCY RULES."
             )
-            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
-            result = json.loads(raw)
-            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
-            _STRUCTURE_CACHE[cache_key] = encrypted
+            try:
+                raw2, result2 = _grc_model_call(
+                    SYSTEM_PROMPT_GRC_CGO,
+                    base_messages + [{"role": "assistant", "content": raw}, {"role": "user", "content": correction}],
+                    3072)
+                result, issues = result2, _grc_cgo_consistency_issues(result2)
+                result["consistency_retry_used"] = True
+            except (json.JSONDecodeError, ValueError, KeyError, IndexError):
+                pass  # keep the first answer; its warnings are reported below
 
+        result["evaluation_date_used"] = ctx["eval_date"].isoformat()
+        result["ignored_test_metadata_fields"] = ctx["removed"]
+        if issues:
+            result["consistency_warnings"] = issues   # shown to the user; never cached
+        else:
+            _grc_cache_put(cache_key, result)
         return jsonify(result)
 
     except json.JSONDecodeError:
@@ -1342,53 +1549,39 @@ def grc_cgo_http():
 @app.route("/grc-cgosti", methods=["POST", "OPTIONS"])
 def grc_cgosti_http():
     """
-    CGOSTI GRC — Complex (CGOSTI) mode: full five-layer assessment, one
-    layer per call, matching the proven Adversarial Checklist pattern.
-    Dynamic verdict/dimension vocabulary, read from the Rulebook itself.
+    CGOSTI GRC — Complex (CGOSTI) mode: full five-layer assessment, one layer
+    per call, matching the Adversarial Checklist pattern. Dynamic verdict /
+    dimension vocabulary read from the Rulebook. Shares the evaluation-date and
+    answer-key-stripping safeguards with CGO mode.
     """
     if request.method == "OPTIONS":
-        resp = jsonify({"status": "ok"})
-        req_origin = request.headers.get("Origin", "")
-        resp.headers["Access-Control-Allow-Origin"] = req_origin if req_origin in ALLOWED_ORIGINS else ALLOWED_ORIGINS[0]
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        resp.headers["Access-Control-Max-Age"] = "3600"
-        return resp, 200
+        return _grc_options_response()
 
     body = request.get_json()
     if not body:
         return jsonify({"error": "Invalid JSON"}), 400
-
-    rulebook = (body.get("rulebook") or "").strip()
-    subject = (body.get("subject") or "").strip()
     layer = (body.get("layer") or "").strip().lower()
-
     VALID_LAYERS = {"goal", "objectives", "strategy", "tactics", "innovations"}
-    if not rulebook or not subject:
-        return jsonify({"error": "Both 'rulebook' and 'subject' are required."}), 400
     if layer not in VALID_LAYERS:
         return jsonify({"error": f"'layer' must be one of: {', '.join(sorted(VALID_LAYERS))}"}), 400
+    ctx, err = _grc_prepare_inputs(body)
+    if err:
+        return err
 
     try:
-        cache_key = hashlib.sha256((rulebook.strip() + "||" + subject.strip() + "||cgosti||" + layer).encode("utf-8")).hexdigest()
+        cache_key = hashlib.sha256("||".join(
+            [ctx["rulebook"], ctx["subject"], ctx["eval_date"].isoformat(), "cgosti", layer]).encode("utf-8")).hexdigest()
+        cached = _grc_cache_get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+        if not ANTHROPIC_API_KEY:
+            return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
 
-        if cache_key in _STRUCTURE_CACHE:
-            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
-            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
-        else:
-            if not ANTHROPIC_API_KEY:
-                return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
-            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg = client.messages.create(
-                model="claude-sonnet-4-6", max_tokens=2048, temperature=0,
-                system=[{"type": "text", "text": SYSTEM_PROMPT_GRC_CGOSTI, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": f"RULEBOOK:\n{rulebook}\n\nSUBJECT:\n{subject}\n\nLAYER TO ASSESS THIS CALL: {layer}"}]
-            )
-            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
-            result = json.loads(raw)
-            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
-            _STRUCTURE_CACHE[cache_key] = encrypted
-
+        messages = [{"role": "user", "content": _grc_user_message(ctx, f"\n\nLAYER TO ASSESS THIS CALL: {layer}")}]
+        _raw, result = _grc_model_call(SYSTEM_PROMPT_GRC_CGOSTI, messages, 2048)
+        result["evaluation_date_used"] = ctx["eval_date"].isoformat()
+        result["ignored_test_metadata_fields"] = ctx["removed"]
+        _grc_cache_put(cache_key, result)
         return jsonify(result)
 
     except json.JSONDecodeError:
