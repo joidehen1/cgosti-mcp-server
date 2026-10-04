@@ -118,6 +118,15 @@
 
   .summary-text { font-size: 13px; color: #ddd; line-height: 1.6; margin-bottom: 16px; }
 
+  .export-wrap { margin: 28px 0 0; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1); text-align: center; }
+  .export-label { font-size: 11px; font-weight: 700; color: var(--gold); letter-spacing: 0.1em; margin-bottom: 12px; }
+  .export-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .export-btn { padding: 6px 14px; background: transparent; border: 1px solid rgba(87,204,153,0.3); color: #57cc99; border-radius: 6px; font-size: 10px; cursor: pointer; font-family: inherit; }
+  .export-btn:hover { background: rgba(87,204,153,0.08); }
+  .scope-toggle { display: flex; gap: 8px; justify-content: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .toggle-btn { padding: 8px 20px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; background: transparent; border: 1px solid rgba(255,255,255,0.2); color: #aaa; font-family: inherit; }
+  .toggle-btn.selected { background: rgba(155,93,229,0.15); border-color: var(--purple); color: var(--purple); }
+
   footer { text-align: center; padding: 24px; font-size: 9px; color: #666; letter-spacing: 0.1em; }
 </style>
 </head>
@@ -199,12 +208,32 @@
     <div class="tab-panel" id="panel_strategy" data-layer="strategy"></div>
     <div class="tab-panel" id="panel_tactics" data-layer="tactics"></div>
     <div class="tab-panel" id="panel_innovations" data-layer="innovations"></div>
+
+    <div class="export-wrap" id="cgostiExport" style="display:none;">
+      <div class="export-label">EXPORT REPORT</div>
+      <div class="scope-toggle">
+        <button class="toggle-btn selected" id="scopeFull" onclick="setCgostiScope('full')">FULL (ALL ASSESSED LAYERS)</button>
+        <button class="toggle-btn" id="scopePartial" onclick="setCgostiScope('partial')">PARTIAL (CURRENT TAB)</button>
+      </div>
+      <div class="export-row">
+        <button class="export-btn" onclick="exportCGOSTI('json')">↓ JSON</button>
+        <button class="export-btn" onclick="exportCGOSTI('md')">↓ MD</button>
+      </div>
+    </div>
   </div>
 
   <div class="status-line" id="statusLine"></div>
   <div id="errorBox"></div>
 
   <div id="cgoResultArea" style="display:none;"></div>
+
+  <div class="export-wrap" id="cgoExportRow" style="display:none;">
+    <div class="export-label">EXPORT REPORT</div>
+    <div class="export-row">
+      <button class="export-btn" onclick="exportCGO('json')">↓ JSON</button>
+      <button class="export-btn" onclick="exportCGO('md')">↓ MD</button>
+    </div>
+  </div>
 </main>
 
 <footer>CGOSTI FRAMEWORK © MIGHTY UNITS LTD 2026 · POWERED BY CLAUDE (ANTHROPIC)</footer>
@@ -213,6 +242,10 @@
   const API_BASE = "https://mcp.mightyunits.com";
   let currentMode = "cgo";
   let currentTab = "goal";
+  let lastCGO = null;
+  const layerResults = {};
+  const layerInputs = {};
+  let cgostiScope = "full";
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -275,6 +308,8 @@
     document.getElementById('cgoActionRow').style.display = mode === 'cgo' ? 'flex' : 'none';
     document.getElementById('cgostiSection').style.display = mode === 'cgosti' ? 'block' : 'none';
     document.getElementById('cgoResultArea').style.display = 'none';
+    document.getElementById('cgoExportRow').style.display = 'none';
+    document.getElementById('cgostiExport').style.display = (mode === 'cgosti' && Object.keys(layerResults).length) ? 'block' : 'none';
   }
 
   function setStatus(msg) { document.getElementById('statusLine').textContent = msg; }
@@ -318,6 +353,7 @@
   }
 
   function renderCGOResult(data) {
+    lastCGO = data;
     const vClass = verdictClass(data.overall_verdict);
     let html = warningHtml(data);
     html += '<div class="pattern-tag ' + esc(data.rulebook_pattern) + '">' +
@@ -341,6 +377,7 @@
     const area = document.getElementById('cgoResultArea');
     area.innerHTML = html;
     area.style.display = 'block';
+    document.getElementById('cgoExportRow').style.display = 'block';
   }
 
   function switchTab(layer) {
@@ -393,6 +430,9 @@
 
       renderCGOSTITabResult(layer, data);
       document.getElementById('panel_' + layer).dataset.rendered = 'true';
+      layerResults[layer] = data;
+      layerInputs[layer] = inputsKey(inputs);
+      document.getElementById('cgostiExport').style.display = 'block';
     } catch (e) {
       document.getElementById('status_line_' + layer).textContent = e.message;
     } finally {
@@ -415,6 +455,155 @@
         '<div class="finding-detail">' + esc(c.detail) + '</div></div>';
     });
     panel.innerHTML = html;
+  }
+
+  // ===== Export (JSON / Markdown) =====
+  // Exports use the RAW result text (never the HTML-escaped screen text) and always carry
+  // the same caveats the screen shows: pattern framing, consistency warnings, ignored fields.
+  const LAYER_ORDER = ['goal', 'objectives', 'strategy', 'tactics', 'innovations'];
+  const LAYER_LABEL = { goal: 'Goal', objectives: 'Objectives', strategy: 'Strategy', tactics: 'Tactics', innovations: 'Innovations' };
+
+  function oneLine(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
+  function patternLabel(p) { return p === 'dispute_style' ? 'dispute-style' : 'compliance-style'; }
+  function inputsKey(inputs) { return inputs.rulebook + '\u0001' + inputs.subject + '\u0001' + inputs.evaluation_date; }
+
+  function exportStatement(patterns) {
+    const list = Array.isArray(patterns) ? patterns : [patterns];
+    return list.indexOf('dispute_style') !== -1
+      ? 'This is a structural read of the case as submitted, not a confirmed or outcome-validated judgement. It was produced by an LLM-driven assessment, not a deterministic calculation.'
+      : 'This assessment was produced by an LLM-driven system (not a deterministic calculation) from the rulebook and subject supplied, as of the evaluation date. Review it before relying on it.';
+  }
+
+  function downloadText(filename, mime, text) {
+    const blob = new Blob([text], { type: mime + ';charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  // ---- CGO (single result) ----
+  function buildCGOJson(data, exportedAt) {
+    return JSON.stringify({
+      report: 'CGOSTI GRC Assessment', mode: 'CGO (Simple)', generated_by: 'CGOSTI GRC System — Mighty Units Ltd',
+      exported_at: exportedAt, evaluation_date: data.evaluation_date_used || null,
+      statement: exportStatement(data.rulebook_pattern), result: data
+    }, null, 2);
+  }
+
+  function buildCGOMarkdown(data, exportedAt) {
+    const L = ['# CGOSTI GRC Assessment — Simple (CGO)', ''];
+    L.push('- **Evaluation date:** ' + oneLine(data.evaluation_date_used || 'not recorded'));
+    L.push('- **Rulebook pattern:** ' + patternLabel(data.rulebook_pattern));
+    L.push('- **Exported:** ' + exportedAt);
+    if (data.ignored_test_metadata_fields && data.ignored_test_metadata_fields.length) {
+      L.push('- **Ignored as non-evidence (answer-key fields):** ' + data.ignored_test_metadata_fields.map(oneLine).join(', '));
+    }
+    L.push('');
+    if (data.consistency_warnings && data.consistency_warnings.length) {
+      L.push('> ⚠ **INCONSISTENT RESULT — do not rely on this output.** The verdict, findings and summary disagree, even after an automatic re-check.');
+      data.consistency_warnings.forEach(function (w) { L.push('> - ' + oneLine(w)); });
+      L.push('');
+    }
+    L.push('## Overall verdict', '', '**' + oneLine(data.overall_verdict || 'N/A') + '**', '');
+    if (data.summary) L.push(String(data.summary).trim(), '');
+    if (data.verdict_derivation) L.push('**How the verdict was reached:** ' + String(data.verdict_derivation).trim(), '');
+    L.push('## Findings', '');
+    (data.findings || []).forEach(function (f) {
+      L.push('### ' + oneLine(f.requirement), '');
+      L.push('**Verdict:** ' + oneLine(f.verdict), '');
+      if (f.evidence) L.push('**Evidence:** ' + oneLine(f.evidence), '');
+      if (f.reason) L.push('**Reason:** ' + oneLine(f.reason), '');
+      if (f.required_action) L.push('**Required action:** ' + oneLine(f.required_action), '');
+    });
+    L.push('---', '', '*' + exportStatement(data.rulebook_pattern) + '*', '');
+    return L.join('\n');
+  }
+
+  function exportCGO(kind) {
+    if (!lastCGO) { setStatus('⚠ Run an assessment first.'); return; }
+    const exportedAt = new Date().toISOString();
+    const date = lastCGO.evaluation_date_used || todayLocalISO();
+    if (kind === 'json') downloadText('grc-cgo-report-' + date + '.json', 'application/json', buildCGOJson(lastCGO, exportedAt));
+    else downloadText('grc-cgo-report-' + date + '.md', 'text/markdown', buildCGOMarkdown(lastCGO, exportedAt));
+  }
+
+  // ---- CGOSTI (per-layer results) ----
+  function setCgostiScope(scope) {
+    cgostiScope = scope;
+    document.getElementById('scopeFull').classList.toggle('selected', scope === 'full');
+    document.getElementById('scopePartial').classList.toggle('selected', scope === 'partial');
+  }
+
+  function collectCGOSTI(scope) {
+    const assessed = LAYER_ORDER.filter(function (l) { return layerResults[l]; });
+    const included = scope === 'partial' ? assessed.filter(function (l) { return l === currentTab; }) : assessed;
+    const notAssessed = scope === 'partial' ? [] : LAYER_ORDER.filter(function (l) { return !layerResults[l]; });
+    const dates = Array.from(new Set(included.map(function (l) { return layerResults[l].evaluation_date_used; }).filter(Boolean)));
+    const sameInputs = new Set(included.map(function (l) { return layerInputs[l]; })).size <= 1;
+    const warnings = [];
+    if (dates.length > 1) warnings.push('Layers were assessed on different evaluation dates: ' + dates.join(', ') + '.');
+    if (!sameInputs) warnings.push('Layers were assessed against different rulebook/subject inputs and may not belong together.');
+    return { included: included, notAssessed: notAssessed, dates: dates, warnings: warnings };
+  }
+
+  function buildCGOSTIJson(scope, exportedAt) {
+    const c = collectCGOSTI(scope);
+    return JSON.stringify({
+      report: 'CGOSTI GRC Assessment', mode: 'CGOSTI (Complex)', generated_by: 'CGOSTI GRC System — Mighty Units Ltd',
+      exported_at: exportedAt, scope: scope, layers_included: c.included, layers_not_assessed: c.notAssessed,
+      evaluation_dates: c.dates, warnings: c.warnings,
+      statement: exportStatement(c.included.map(function (l) { return layerResults[l].rulebook_pattern; })),
+      layers: c.included.map(function (l) { return layerResults[l]; })
+    }, null, 2);
+  }
+
+  function buildCGOSTIMarkdown(scope, exportedAt) {
+    const c = collectCGOSTI(scope);
+    const names = function (arr) { return arr.map(function (l) { return LAYER_LABEL[l]; }).join(', '); };
+    const patterns = c.included.map(function (l) { return layerResults[l].rulebook_pattern; });
+    const ignored = Array.from(new Set([].concat.apply([], c.included.map(function (l) { return layerResults[l].ignored_test_metadata_fields || []; }))));
+    const L = ['# CGOSTI GRC Assessment — Complex (CGOSTI)', ''];
+    L.push('- **Scope:** ' + (scope === 'partial' ? 'Partial — current tab only' : 'Full — all assessed layers'));
+    L.push('- **Layers included:** ' + names(c.included));
+    if (c.notAssessed.length) L.push('- **Not yet assessed (not in this report):** ' + names(c.notAssessed));
+    L.push('- **Evaluation date:** ' + (c.dates.join(', ') || 'not recorded'));
+    L.push('- **Rulebook pattern:** ' + Array.from(new Set(patterns.map(patternLabel))).join(', '));
+    if (ignored.length) L.push('- **Ignored as non-evidence (answer-key fields):** ' + ignored.map(oneLine).join(', '));
+    L.push('- **Exported:** ' + exportedAt, '');
+    if (c.warnings.length) {
+      L.push('> ⚠ **CHECK BEFORE RELYING ON THIS REPORT**');
+      c.warnings.forEach(function (w) { L.push('> - ' + w); });
+      L.push('');
+    }
+    c.included.forEach(function (l) {
+      const d = layerResults[l];
+      L.push('## ' + LAYER_LABEL[l], '');
+      if (d.layer_note) L.push('*' + oneLine(d.layer_note) + '*', '');
+      (d.cells || []).forEach(function (cell) {
+        L.push('### ' + oneLine(cell.dimension) + ' — ' + oneLine(cell.verdict), '', String(cell.detail == null ? '' : cell.detail).trim(), '');
+      });
+      if (d.dominant_finding && d.dominant_finding.dimension) {
+        L.push('**Dominant finding:** ' + oneLine(d.dominant_finding.dimension) + ' — ' + oneLine(d.dominant_finding.verdict), '');
+      }
+    });
+    L.push('---', '', '*' + exportStatement(patterns) + '*', '');
+    return L.join('\n');
+  }
+
+  function exportCGOSTI(kind) {
+    const c = collectCGOSTI(cgostiScope);
+    if (!c.included.length) {
+      setStatus(cgostiScope === 'partial' ? '⚠ The current tab has not been assessed yet.' : '⚠ Run at least one layer first.');
+      return;
+    }
+    const exportedAt = new Date().toISOString();
+    const date = c.dates[0] || todayLocalISO();
+    const tag = cgostiScope === 'partial' ? c.included[0] : 'full';
+    const base = 'grc-cgosti-report-' + tag + '-' + date;
+    if (kind === 'json') downloadText(base + '.json', 'application/json', buildCGOSTIJson(cgostiScope, exportedAt));
+    else downloadText(base + '.md', 'text/markdown', buildCGOSTIMarkdown(cgostiScope, exportedAt));
   }
 
   document.getElementById('evalDate').value = todayLocalISO();
