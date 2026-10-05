@@ -243,7 +243,7 @@ Do NOT generate innovation_ai in this call. It will be requested separately."""
 GRC_SHARED_RULES = """
 EVALUATION DATE — the user message states an EVALUATION DATE. That is today's date for this assessment. Use it for every time-based rule (expiry windows, overdue items, "within N days"). Never assume, substitute or infer any other date as "today", and never rely on your own sense of the current date.
 
-DATE ARITHMETIC — the user message also contains a DATE REFERENCE TABLE, computed by the server, giving for each YYYY-MM-DD date found in the Subject the exact number of calendar days between that date and the evaluation date (negative means the date is already in the past). Use those figures exactly as given; do not recompute them. When a date drives a verdict, cite the figure in your reason (for example: "expiry 2026-09-03 is 30 days in the past"). If a date in the Subject is not in the table (for example because it uses another format), compute the difference yourself from the evaluation date and show the calculation.
+DATE ARITHMETIC — the user message also contains a DATE REFERENCE TABLE, computed by the server, giving for each YYYY-MM-DD date found in the Subject the exact number of calendar days between that date and the evaluation date (negative means the date is already in the past). Use those figures exactly as given; do not recompute them. When a date drives a verdict, cite the figure in your reason (for example: "expiry 2026-09-03 is 30 days in the past"). If a date in the Subject is not in the table (for example because it uses another format), compute the difference yourself from the evaluation date and show the calculation. Each figure belongs to one date: when you cite a number of days, take it from the table row for the date in that same finding, and never reuse a figure from a different requirement.
 
 TEST / ANSWER-KEY METADATA — a Subject may contain fields that exist only for demos or QA and are not evidence about the Subject (for example fields whose names begin with "expected_outcome", "expected_verdict" or "answer_key", or contain "controller_only" or "demo_only"). The server removes the common ones, but if any remain, ignore them completely: do not treat them as evidence, do not try to reconcile the real data against them, and do not mention them in findings or summary.
 
@@ -1385,6 +1385,20 @@ def _build_date_reference(text, eval_date):
     return "\n".join(lines)
 
 
+def _date_deltas(text, eval_date):
+    """{iso_date: calendar-day difference from eval_date} for every valid YYYY-MM-DD date in text."""
+    out = {}
+    for m in _ISO_DATE_RE.finditer(text):
+        raw = m.group(0)
+        if raw in out:
+            continue
+        try:
+            out[raw] = (datetime.strptime(raw, "%Y-%m-%d").date() - eval_date).days
+        except ValueError:
+            continue
+    return out
+
+
 def _grc_prepare_inputs(body):
     """Shared input handling for both GRC routes. Returns (ctx, None) or (None, error_response)."""
     rulebook = (body.get("rulebook") or "").strip()
@@ -1406,6 +1420,7 @@ def _grc_prepare_inputs(body):
         "removed": removed,
         "eval_date": eval_date,
         "date_table": _build_date_reference(subject_clean, eval_date),
+        "date_deltas": _date_deltas(subject_clean, eval_date),
     }, None
 
 
@@ -1453,13 +1468,33 @@ _SELF_CORRECTION_RE = re.compile(
 _LEGAL_TERMS_RE = re.compile(
     r"\b(?:un)?lawful(?:ly)?\b|\billegal(?:ly)?\b|\blegally\b|\bcriminal(?:ly)?\b|\bby law\b|\bbreach of (?:the )?law\b|\bcontravene[sd]?\b", re.I)
 _CLASSIFYING_VERBS = r"(?:constitutes|amounts to|classified as|classed as|falls under|treated as)"
+_DAY_CLAIM_PATTERNS = [
+    (re.compile(r"(\d+)\s+(?:calendar\s+)?days?\s+in\s+the\s+(future|past)\b", re.I), None),
+    (re.compile(r"(\d+)\s+(?:calendar\s+)?days?\s+(?:away|remaining|ahead)\b", re.I), "future"),
+    (re.compile(r"(\d+)\s+(?:calendar\s+)?days?\s+(?:ago|overdue)\b", re.I), "past"),
+    (re.compile(r"(?<![\w.])([+\-−–])(\d+)\s+days?\b"), "signed"),
+]
+
+
+def _day_claims(text):
+    """[(n, is_past)] for every explicit 'N days in the future/past', 'N days away/ago' or '+N/-N days' statement."""
+    claims = []
+    for rx, kind in _DAY_CLAIM_PATTERNS:
+        for m in rx.finditer(text or ""):
+            if kind is None:
+                claims.append((int(m.group(1)), m.group(2).lower() == "past"))
+            elif kind == "signed":
+                claims.append((int(m.group(2)), m.group(1) in "-−–"))
+            else:
+                claims.append((int(m.group(1)), kind == "past"))
+    return claims
 
 
 def _legal_stem(term):
     return re.sub(r"^un", "", re.sub(r"ly$", "", term))
 
 
-def _grc_cgo_consistency_issues(result, rulebook=None):
+def _grc_cgo_consistency_issues(result, rulebook=None, date_deltas=None):
     """Detects the 'two verdicts in one response' failure and its close relatives:
     overall verdict vs the rulebook's labels / triggering requirements / summary;
     each finding's verdict vs its own reason (incl. self-correction leaking into text);
@@ -1527,6 +1562,35 @@ def _grc_cgo_consistency_issues(result, rulebook=None):
                 used.append(term)
         if used:
             issues.append("the output uses legal wording the Rulebook does not use (" + ", ".join(used) + "); conclusions must stay within the Rulebook's own terms.")
+
+    # day-count claims vs the server's own date arithmetic
+    if date_deltas:
+        rb_nums = {int(n) for n in re.findall(r"(\d+)[\s-]*(?:(?:calendar|working|business)[\s-]+)?days?\b", str(rulebook or ""), re.I)}
+        pairs_all = {(abs(v), v < 0) for v in date_deltas.values()}
+
+        def fmt(iso, v):
+            return f"{iso} is {abs(v)} days in the {'past' if v < 0 else 'future'}" if v else f"{iso} is today"
+
+        for f in findings:
+            req = " ".join(str(f.get("requirement") or "").split())
+            text = " ".join(str(f.get(k) or "") for k in ("evidence", "reason"))
+            cited = {m.group(0): date_deltas[m.group(0)] for m in _ISO_DATE_RE.finditer(text) if m.group(0) in date_deltas}
+            if not cited:
+                continue
+            ok_pairs = {(abs(v), v < 0) for v in cited.values()}
+            for n, is_past in _day_claims(text):
+                if n in rb_nums or (n, is_past) in ok_pairs:
+                    continue
+                issues.append(f"finding '{req}' states {n} days in the {'past' if is_past else 'future'}, but the date(s) it cites are: "
+                              + "; ".join(fmt(i, v) for i, v in cited.items()) + ". Use the figures from the DATE REFERENCE TABLE.")
+                break
+        loose = " ".join([str(result.get("summary") or ""), str(result.get("verdict_derivation") or "")])
+        for n, is_past in _day_claims(loose):
+            if n in rb_nums or (n, is_past) in pairs_all:
+                continue
+            issues.append(f"the summary/derivation states {n} days in the {'past' if is_past else 'future'}, but no date in the Subject is {n} days "
+                          f"{'in the past' if is_past else 'in the future'} from the evaluation date.")
+            break
     return issues
 
 
@@ -1571,7 +1635,7 @@ def grc_cgo_http():
 
         base_messages = [{"role": "user", "content": _grc_user_message(ctx)}]
         raw, result = _grc_model_call(SYSTEM_PROMPT_GRC_CGO, base_messages, 3072)
-        issues = _grc_cgo_consistency_issues(result, ctx["rulebook"])
+        issues = _grc_cgo_consistency_issues(result, ctx["rulebook"], ctx["date_deltas"])
         if issues:
             correction = (
                 "CONSISTENCY CORRECTION REQUIRED. Your previous answer was internally inconsistent:\n- "
@@ -1584,7 +1648,7 @@ def grc_cgo_http():
                     SYSTEM_PROMPT_GRC_CGO,
                     base_messages + [{"role": "assistant", "content": raw}, {"role": "user", "content": correction}],
                     3072)
-                result, issues = result2, _grc_cgo_consistency_issues(result2, ctx["rulebook"])
+                result, issues = result2, _grc_cgo_consistency_issues(result2, ctx["rulebook"], ctx["date_deltas"])
                 result["consistency_retry_used"] = True
             except (json.JSONDecodeError, ValueError, KeyError, IndexError):
                 pass  # keep the first answer; its warnings are reported below
