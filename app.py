@@ -251,7 +251,7 @@ MOST SPECIFIC LABEL — where the Rulebook defines a more specific verdict label
 
 ONE FINAL DECISION PER FIELD — decide each verdict before you write its explanation. A verdict field must be your final decision, and the explanation beside it must support that same verdict. Never revise yourself inside a field: no "re-evaluating", "on reflection", "actually" or "wait", and never write a reason that concludes a different verdict from the one in the verdict field. Write the explanation first and the verdict after it, so that the verdict reflects your finished reasoning.
 
-RULEBOOK-ONLY CONCLUSIONS — base every conclusion on the Rulebook's own text. State consequences in the Rulebook's own terms (for example "non-compliant for this assignment under Rule 10"). Do not add legal characterisations such as "lawful", "unlawful", "illegal" or "legally" unless the Rulebook itself uses that language.
+RULEBOOK-ONLY CONCLUSIONS — base every conclusion on the Rulebook's own text. State consequences in the Rulebook's own terms (for example "non-compliant for this assignment under Rule 10"). Do not add legal characterisations such as "lawful", "unlawful", "illegal" or "legally" unless the Rulebook itself uses that language. Likewise, do not state or imply that anyone must not be deployed, assigned, approved or allowed to proceed, or that something must happen before deployment, unless the Rulebook itself states that restriction for that requirement; where it does (for example a requirement to be completed before deployment), say so in the Rulebook's own terms.
 """
 
 SYSTEM_PROMPT_GRC_CGO = """You are the CGOSTI GRC Assessor (Simple / CGO mode), built for Mighty Units Ltd.
@@ -1494,6 +1494,57 @@ def _legal_stem(term):
     return re.sub(r"^un", "", re.sub(r"ly$", "", term))
 
 
+_DEPLOY_RE = re.compile(r"\bdeploy\w*", re.I)
+_DEPLOY_DIRECTIVE_RES = [re.compile(x, re.I) for x in (
+    # "must not be deployed", "should not be deployed", "cannot lawfully be deployed", "never deployed"
+    r"\b(?:must|should|shall|cannot|can not|can't|may not|never)\s+(?:\w+\s+){0,3}?deploy\w*",
+    # "do not deploy", "not to be deployed", "not be deployed"
+    r"\bnot\s+(?:to\s+)?(?:be\s+)?deploy\w*",
+    # "deployment ... must not proceed"
+    r"\bdeploy\w*(?:\s+\w+){0,6}?\s+(?:must|should|shall|cannot|can not|can't)\s+(?:not\s+)?(?:proceed|go ahead|continue|happen|take place|be (?:allowed|permitted|confirmed|approved))",
+    # "before deployment", "before X is deployed", "until ... deployed", "unless ... deployed"
+    r"\b(?:before|prior to|until|unless)\b[^.;]{0,80}?\bdeploy\w*",
+    r"\bdeploy\w*[^.;]{0,40}?\b(?:until|unless|only after|only once)\b",
+    # "barred from deployment", "not eligible for deployment", "prohibited"
+    r"\b(?:not\s+(?:eligible|permitted|allowed|approved|cleared)|ineligible|barred|prohibited)\b[^.;]{0,40}?\bdeploy\w*",
+    r"\bdeploy\w*[^.;]{0,40}?\b(?:prohibited|barred|not permitted|not allowed)\b",
+)]
+
+
+def _deploy_directive_sentences(text):
+    """Sentences that state a deployment restriction or precondition (e.g. 'must not be
+    deployed', 'before deployment', 'barred from deployment'). Purely descriptive uses
+    ('not required for this deployment', 'assigned to a deployment at Site A') are not
+    directives."""
+    return [sent.strip() for sent in re.split(r"(?<=[.!?;])\s+", str(text or ""))
+            if any(rx.search(sent) for rx in _DEPLOY_DIRECTIVE_RES)]
+
+
+def _rulebook_deploy_markers(rulebook):
+    """(normalised requirement names, rule numbers) of rulebook lines that themselves mention deployment."""
+    names, numbers = set(), set()
+    for line in str(rulebook or "").splitlines():
+        if not _DEPLOY_RE.search(line):
+            continue
+        body = line.strip()
+        m = re.match(r"(?:rule|requirement)?\s*(\d+)[.)]\s*(.*)", body, re.I)
+        if m:
+            numbers.add(m.group(1))
+            body = m.group(2)
+        name = _norm_label(re.split(r"[:—–]|\s-\s", body, maxsplit=1)[0])
+        if len(name) >= 4:
+            names.add(name)
+    return names, numbers
+
+
+def _deploy_grounded(context, names, numbers):
+    """True if the context (a finding's requirement text, or a summary sentence) refers to a rulebook line that mentions deployment."""
+    c = _norm_label(context)
+    if any(n in c for n in names):
+        return True
+    return any(re.search(r"\b(?:rule|requirement)\s+" + n + r"\b", c) for n in numbers)
+
+
 def _grc_cgo_consistency_issues(result, rulebook=None, date_deltas=None):
     """Detects the 'two verdicts in one response' failure and its close relatives:
     overall verdict vs the rulebook's labels / triggering requirements / summary;
@@ -1562,6 +1613,27 @@ def _grc_cgo_consistency_issues(result, rulebook=None, date_deltas=None):
                 used.append(term)
         if used:
             issues.append("the output uses legal wording the Rulebook does not use (" + ", ".join(used) + "); conclusions must stay within the Rulebook's own terms.")
+
+    # deployment restrictions the rulebook does not state
+    if rulebook is not None:
+        d_names, d_numbers = _rulebook_deploy_markers(rulebook)
+        has_deploy_rule = bool(d_names or d_numbers)
+        def snip(t):
+            m = _DEPLOY_RE.search(t)
+            a, b = max(0, m.start() - 60), min(len(t), m.end() + 50)
+            return ("…" if a else "") + t[a:b] + ("…" if b < len(t) else "")
+        for f in findings:
+            req = " ".join(str(f.get("requirement") or "").split())
+            if has_deploy_rule and _deploy_grounded(req, d_names, d_numbers):
+                continue
+            hits = _deploy_directive_sentences(" ".join(str(f.get(k) or "") for k in ("evidence", "reason", "required_action")))
+            if hits:
+                issues.append(f"finding '{req}' states a deployment restriction (\"{snip(hits[0])}\") that the Rulebook does not state for this requirement; describe the consequence in the Rulebook's own terms.")
+        for sent in _deploy_directive_sentences(" ".join([str(result.get("summary") or ""), str(result.get("verdict_derivation") or "")])):
+            if has_deploy_rule and _deploy_grounded(sent, d_names, d_numbers):
+                continue
+            issues.append(f"the summary/derivation states a deployment restriction (\"{snip(sent)}\") that the Rulebook does not state; describe the consequence in the Rulebook's own terms.")
+            break
 
     # day-count claims vs the server's own date arithmetic
     if date_deltas:
