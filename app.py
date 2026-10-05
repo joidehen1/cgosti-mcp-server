@@ -249,7 +249,7 @@ TEST / ANSWER-KEY METADATA — a Subject may contain fields that exist only for 
 
 MOST SPECIFIC LABEL — where the Rulebook defines a more specific verdict label that fits the situation (for example an assignment-specific, conditional, intermediate or exception state), use that label instead of a generic pass/fail label, both for the individual finding and for the overall verdict. The label you choose must be the label of the rule you cite in your reasoning: if your reasoning says a case "constitutes" or "falls under" a named state, that named state is the verdict.
 
-ONE FINAL DECISION PER FIELD — decide each verdict before you write its explanation. A verdict field must be your final decision, and the explanation beside it must support that same verdict. Never revise yourself inside a field: no "re-evaluating", "on reflection", "actually" or "wait", and never write a reason that concludes a different verdict from the one in the verdict field.
+ONE FINAL DECISION PER FIELD — decide each verdict before you write its explanation. A verdict field must be your final decision, and the explanation beside it must support that same verdict. Never revise yourself inside a field: no "re-evaluating", "on reflection", "actually" or "wait", and never write a reason that concludes a different verdict from the one in the verdict field. Write the explanation first and the verdict after it, so that the verdict reflects your finished reasoning.
 
 RULEBOOK-ONLY CONCLUSIONS — base every conclusion on the Rulebook's own text. State consequences in the Rulebook's own terms (for example "non-compliant for this assignment under Rule 10"). Do not add legal characterisations such as "lawful", "unlawful", "illegal" or "legally" unless the Rulebook itself uses that language.
 """
@@ -278,13 +278,13 @@ CONSISTENCY RULES — your answer must be internally consistent:
 (5) Before returning, check rules 1-4 and correct anything inconsistent.
 
 Return ONLY valid JSON. No markdown. No backticks.
-Keys, in this order:
+Write the keys in EXACTLY this order. The order matters: every explanation comes BEFORE the verdict it supports, so each verdict reflects your finished reasoning.
   verdict_labels_found (array of strings — the verdict labels you identified in the Rulebook, in the Rulebook's own words),
   rulebook_pattern (string — "compliance_style" or "dispute_style", per the pattern recognition above),
-  findings (array of objects, each with: requirement [string], evidence [string — what was found for this requirement], verdict [string — using the Rulebook's own vocabulary], reason [string], required_action [string or null]),
+  findings (array of objects; write each object's fields in this order: requirement [string], evidence [string — what was found for this requirement], reason [string — your complete reasoning, finished before you choose the verdict], verdict [string — the final decision your reason supports, using the Rulebook's own vocabulary], required_action [string or null]),
   triggering_requirements (array of strings — which specific requirement(s) drove the overall verdict),
-  overall_verdict (string — exactly one of the Rulebook's own verdict labels),
-  verdict_derivation (string — the Rulebook rule that turns the findings into the overall verdict, and which finding(s) it was applied to),
+  verdict_derivation (string — the Rulebook rule that turns the findings into the overall verdict, and which finding(s) it was applied to; finish it before you choose overall_verdict),
+  overall_verdict (string — exactly one of the Rulebook's own verdict labels, the final decision your verdict_derivation supports),
   summary (string — one paragraph overview, framed per the rulebook_pattern determination, stating the same overall verdict)."""
 
 SYSTEM_PROMPT_GRC_CGOSTI = """You are the CGOSTI GRC Assessor (Complex / CGOSTI mode), built for Mighty Units Ltd.
@@ -298,11 +298,12 @@ Your task: for the ONE specified layer, evaluate the Subject against whatever ri
 PATTERN RECOGNITION FOR FRAMING: assess whether this Rulebook more closely resembles a deterministic compliance policy or an adversarial/dispute context, and frame your confidence language accordingly, as described above.
 
 Return ONLY valid JSON. No markdown. No backticks.
+Write the keys, and each object's fields, in EXACTLY the order listed. The order matters: every explanation comes BEFORE the verdict it supports.
 Keys:
   layer (the layer name you were asked to assess),
   verdict_labels_found (array of strings),
   rulebook_pattern (string — "compliance_style" or "dispute_style"),
-  cells (array of objects — one per dimension assessed — each with: dimension [string], verdict [string, using Rulebook vocabulary or the general holds/fractures/partial/untestable set], detail [string]),
+  cells (array of objects — one per dimension assessed — each with, in this order: dimension [string], detail [string — your complete reasoning, finished before you choose the verdict], verdict [string — the final decision your detail supports, using Rulebook vocabulary or the general holds/fractures/partial/untestable set]),
   dominant_finding (object: dimension, verdict, detail — the single most severe finding among the dimensions assessed),
   layer_note (string — one or two sentences, framed per the rulebook_pattern determination)."""
 
@@ -1447,7 +1448,8 @@ def _norm_label(s):
 
 _SELF_CORRECTION_RE = re.compile(
     r"\b(?:re-?evaluat(?:e|ing)\b|reconsider(?:ing)?\b|on second thought\b|on reflection\b|upon reflection\b)"
-    r"|\bwait[,.]|\blet me (?:re|check|recalculate)", re.I)
+    r"|\b(?:wait|hmm+|oops|hold on)(?:\s*[,.:;!…—–]|\s+-\s)"
+    r"|\bactually,|\bcorrection:|\blet me (?:re|check|recalculate|reconsider)", re.I)
 _LEGAL_TERMS_RE = re.compile(
     r"\b(?:un)?lawful(?:ly)?\b|\billegal(?:ly)?\b|\blegally\b|\bcriminal(?:ly)?\b|\bby law\b|\bbreach of (?:the )?law\b|\bcontravene[sd]?\b", re.I)
 _CLASSIFYING_VERBS = r"(?:constitutes|amounts to|classified as|classed as|falls under|treated as)"
