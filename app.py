@@ -246,6 +246,12 @@ EVALUATION DATE — the user message states an EVALUATION DATE. That is today's 
 DATE ARITHMETIC — the user message also contains a DATE REFERENCE TABLE, computed by the server, giving for each YYYY-MM-DD date found in the Subject the exact number of calendar days between that date and the evaluation date (negative means the date is already in the past). Use those figures exactly as given; do not recompute them. When a date drives a verdict, cite the figure in your reason (for example: "expiry 2026-09-03 is 30 days in the past"). If a date in the Subject is not in the table (for example because it uses another format), compute the difference yourself from the evaluation date and show the calculation.
 
 TEST / ANSWER-KEY METADATA — a Subject may contain fields that exist only for demos or QA and are not evidence about the Subject (for example fields whose names begin with "expected_outcome", "expected_verdict" or "answer_key", or contain "controller_only" or "demo_only"). The server removes the common ones, but if any remain, ignore them completely: do not treat them as evidence, do not try to reconcile the real data against them, and do not mention them in findings or summary.
+
+MOST SPECIFIC LABEL — where the Rulebook defines a more specific verdict label that fits the situation (for example an assignment-specific, conditional, intermediate or exception state), use that label instead of a generic pass/fail label, both for the individual finding and for the overall verdict. The label you choose must be the label of the rule you cite in your reasoning: if your reasoning says a case "constitutes" or "falls under" a named state, that named state is the verdict.
+
+ONE FINAL DECISION PER FIELD — decide each verdict before you write its explanation. A verdict field must be your final decision, and the explanation beside it must support that same verdict. Never revise yourself inside a field: no "re-evaluating", "on reflection", "actually" or "wait", and never write a reason that concludes a different verdict from the one in the verdict field.
+
+RULEBOOK-ONLY CONCLUSIONS — base every conclusion on the Rulebook's own text. State consequences in the Rulebook's own terms (for example "non-compliant for this assignment under Rule 10"). Do not add legal characterisations such as "lawful", "unlawful", "illegal" or "legally" unless the Rulebook itself uses that language.
 """
 
 SYSTEM_PROMPT_GRC_CGO = """You are the CGOSTI GRC Assessor (Simple / CGO mode), built for Mighty Units Ltd.
@@ -1439,9 +1445,24 @@ def _norm_label(s):
     return re.sub(r"[\s_\-]+", " ", str(s or "").strip().lower())
 
 
-def _grc_cgo_consistency_issues(result):
-    """Detects the 'two verdicts in one response' failure: overall verdict vs the
-    rulebook's labels, vs the requirement(s) that triggered it, vs the summary."""
+_SELF_CORRECTION_RE = re.compile(
+    r"\b(?:re-?evaluat(?:e|ing)\b|reconsider(?:ing)?\b|on second thought\b|on reflection\b|upon reflection\b)"
+    r"|\bwait[,.]|\blet me (?:re|check|recalculate)", re.I)
+_LEGAL_TERMS_RE = re.compile(
+    r"\b(?:un)?lawful(?:ly)?\b|\billegal(?:ly)?\b|\blegally\b|\bcriminal(?:ly)?\b|\bby law\b|\bbreach of (?:the )?law\b|\bcontravene[sd]?\b", re.I)
+_CLASSIFYING_VERBS = r"(?:constitutes|amounts to|classified as|classed as|falls under|treated as)"
+
+
+def _legal_stem(term):
+    return re.sub(r"^un", "", re.sub(r"ly$", "", term))
+
+
+def _grc_cgo_consistency_issues(result, rulebook=None):
+    """Detects the 'two verdicts in one response' failure and its close relatives:
+    overall verdict vs the rulebook's labels / triggering requirements / summary;
+    each finding's verdict vs its own reason (incl. self-correction leaking into text);
+    the derivation/summary classifying the case as a different label than the verdict;
+    and legal wording the rulebook itself does not use."""
     issues = []
     labels = {_norm_label(l) for l in (result.get("verdict_labels_found") or []) if l}
     overall = _norm_label(result.get("overall_verdict"))
@@ -1450,7 +1471,8 @@ def _grc_cgo_consistency_issues(result):
     if labels and overall not in labels:
         issues.append(f"overall_verdict '{result.get('overall_verdict')}' is not one of the Rulebook's verdict labels found ({', '.join(sorted(labels))}).")
 
-    by_req = {_norm_label(f.get("requirement")): f for f in (result.get("findings") or []) if isinstance(f, dict)}
+    findings = [f for f in (result.get("findings") or []) if isinstance(f, dict)]
+    by_req = {_norm_label(f.get("requirement")): f for f in findings}
     for t in (result.get("triggering_requirements") or []):
         tn = _norm_label(t)
         match = by_req.get(tn)
@@ -1470,6 +1492,39 @@ def _grc_cgo_consistency_issues(result):
         others = [l for l in labels if l != overall and l in summary]
         if others:
             issues.append(f"the summary refers to '{others[0]}' but does not state the overall verdict '{result.get('overall_verdict')}'.")
+
+    # each finding: verdict field vs its own explanation
+    for f in findings:
+        req = " ".join(str(f.get("requirement") or "").split())
+        fv = _norm_label(f.get("verdict"))
+        raw_text = " ".join(str(f.get(k) or "") for k in ("evidence", "reason"))
+        if _SELF_CORRECTION_RE.search(raw_text):
+            issues.append(f"finding '{req}' contains a self-correction in its text; a verdict field must be a single final decision.")
+        text = _norm_label(raw_text)
+        for L in sorted(labels, key=len, reverse=True):
+            if L != fv and re.search(r"\bverdict(?:\s+is|\s+should\s+be|\s+remains|\s+is\s+therefore|\s+therefore\s+is|:)\s+(?:(?:a|an|the)\s+)?" + re.escape(L) + r"\b", text):
+                issues.append(f"finding '{req}' has verdict '{f.get('verdict')}' but its own reason concludes '{L}'.")
+                break
+
+    # derivation / summary classifying the case as a different (more specific) label than the verdict
+    classif = _norm_label(" ".join([str(result.get("summary") or ""), str(result.get("verdict_derivation") or "")]))
+    for L in sorted(labels, key=len, reverse=True):
+        if L != overall and re.search(r"\b" + _CLASSIFYING_VERBS + r"\s+(?:(?:a|an|the)\s+)?" + re.escape(L) + r"\b", classif):
+            issues.append(f"the reasoning classifies the case as '{L}' but overall_verdict is '{result.get('overall_verdict')}'; use the most specific applicable label.")
+            break
+
+    # legal wording the rulebook does not use
+    if rulebook is not None:
+        rb = _norm_label(rulebook)
+        out_text = " ".join([str(result.get("summary") or ""), str(result.get("verdict_derivation") or "")]
+                            + [str(f.get(k) or "") for f in findings for k in ("evidence", "reason", "required_action")])
+        used = []
+        for m in _LEGAL_TERMS_RE.finditer(out_text):
+            term = m.group(0).lower()
+            if term not in used and _legal_stem(_norm_label(term)) not in rb:
+                used.append(term)
+        if used:
+            issues.append("the output uses legal wording the Rulebook does not use (" + ", ".join(used) + "); conclusions must stay within the Rulebook's own terms.")
     return issues
 
 
@@ -1514,20 +1569,20 @@ def grc_cgo_http():
 
         base_messages = [{"role": "user", "content": _grc_user_message(ctx)}]
         raw, result = _grc_model_call(SYSTEM_PROMPT_GRC_CGO, base_messages, 3072)
-        issues = _grc_cgo_consistency_issues(result)
+        issues = _grc_cgo_consistency_issues(result, ctx["rulebook"])
         if issues:
             correction = (
                 "CONSISTENCY CORRECTION REQUIRED. Your previous answer was internally inconsistent:\n- "
                 + "\n- ".join(issues)
                 + "\nRe-evaluate carefully using the EVALUATION DATE and the DATE REFERENCE TABLE, then return the full JSON again, "
-                  "fully consistent, following the CONSISTENCY RULES."
+                  "fully consistent, following the CONSISTENCY RULES. Use the most specific applicable Rulebook label, keep every verdict field a single final decision with no self-correction in the text, and describe consequences only in the Rulebook's own terms."
             )
             try:
                 raw2, result2 = _grc_model_call(
                     SYSTEM_PROMPT_GRC_CGO,
                     base_messages + [{"role": "assistant", "content": raw}, {"role": "user", "content": correction}],
                     3072)
-                result, issues = result2, _grc_cgo_consistency_issues(result2)
+                result, issues = result2, _grc_cgo_consistency_issues(result2, ctx["rulebook"])
                 result["consistency_retry_used"] = True
             except (json.JSONDecodeError, ValueError, KeyError, IndexError):
                 pass  # keep the first answer; its warnings are reported below

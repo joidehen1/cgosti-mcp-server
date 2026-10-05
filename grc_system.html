@@ -281,6 +281,9 @@
     if (data.ignored_test_metadata_fields && data.ignored_test_metadata_fields.length) {
       html += (html ? ' · ' : '') + 'Ignored as non-evidence (answer-key fields): ' + data.ignored_test_metadata_fields.map(esc).join(', ');
     }
+    if (data.verdict_labels_found && data.verdict_labels_found.length) {
+      html += (html ? ' · ' : '') + 'Verdict labels read from the rulebook: ' + data.verdict_labels_found.map(esc).join(' / ');
+    }
     return html ? '<div class="meta-line">' + html + '</div>' : '';
   }
 
@@ -496,6 +499,9 @@
     const L = ['# CGOSTI GRC Assessment — Simple (CGO)', ''];
     L.push('- **Evaluation date:** ' + oneLine(data.evaluation_date_used || 'not recorded'));
     L.push('- **Rulebook pattern:** ' + patternLabel(data.rulebook_pattern));
+    if (data.verdict_labels_found && data.verdict_labels_found.length) {
+      L.push('- **Verdict labels read from the rulebook:** ' + data.verdict_labels_found.map(oneLine).join(' / '));
+    }
     L.push('- **Exported:** ' + exportedAt);
     if (data.ignored_test_metadata_fields && data.ignored_test_metadata_fields.length) {
       L.push('- **Ignored as non-evidence (answer-key fields):** ' + data.ignored_test_metadata_fields.map(oneLine).join(', '));
@@ -570,6 +576,9 @@
     if (c.notAssessed.length) L.push('- **Not yet assessed (not in this report):** ' + names(c.notAssessed));
     L.push('- **Evaluation date:** ' + (c.dates.join(', ') || 'not recorded'));
     L.push('- **Rulebook pattern:** ' + Array.from(new Set(patterns.map(patternLabel))).join(', '));
+    const flatLabels = [].concat.apply([], c.included.map(function (l) { return layerResults[l].verdict_labels_found || []; }));
+    const labelSet = Array.from(new Set(flatLabels.map(oneLine)));
+    if (labelSet.length) L.push('- **Verdict labels read from the rulebook:** ' + labelSet.join(' / '));
     if (ignored.length) L.push('- **Ignored as non-evidence (answer-key fields):** ' + ignored.map(oneLine).join(', '));
     L.push('- **Exported:** ' + exportedAt, '');
     if (c.warnings.length) {
