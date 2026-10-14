@@ -50,6 +50,13 @@ if _CACHE_KEY:
 else:
     _fernet = Fernet(Fernet.generate_key())
 
+# Result cache switch. DEFAULT OFF: nothing derived from a request is kept
+# after the response has been returned. Set the environment variable
+# CACHE_ENABLED=true only for demos (identical input then returns the stored
+# structure). To turn it off again, set it back to false (or remove it) and
+# restart the app. The cache lives in memory only, so a restart also empties it.
+CACHE_ENABLED = os.environ.get("CACHE_ENABLED", "false").strip().lower() == "true"
+
 SYSTEM_PROMPT = """You are a CGOSTI Architect for Mighty Units Ltd. CGOSTI is a universal framework for comprehension and innovation, originally derived from The Almighty Board Game by Osayuki Joseph Idehen.
 
 CGOSTI ORIGINS:
@@ -689,6 +696,23 @@ def call_health(subject):
 _STRUCTURE_CACHE = {}
 
 
+def _cache_get(key):
+    """Return the cached result for key, or None. Always None when CACHE_ENABLED is off."""
+    if not CACHE_ENABLED:
+        return None
+    blob = _STRUCTURE_CACHE.get(key)
+    if blob is None:
+        return None
+    return json.loads(_fernet.decrypt(blob).decode("utf-8"))
+
+
+def _cache_put(key, value):
+    """Store value (encrypted, in memory). Does nothing when CACHE_ENABLED is off."""
+    if not CACHE_ENABLED:
+        return
+    _STRUCTURE_CACHE[key] = _fernet.encrypt(json.dumps(value).encode("utf-8"))
+
+
 def _structure_one(text):
     """
     Structure a single document by calling Claude directly — no detour through
@@ -699,10 +723,9 @@ def _structure_one(text):
     """
     cache_key = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
-    if cache_key in _STRUCTURE_CACHE:
-        encrypted_bytes = _STRUCTURE_CACHE[cache_key]
-        decrypted_json = _fernet.decrypt(encrypted_bytes).decode("utf-8")
-        return json.loads(decrypted_json)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not configured on the MCP server.")
@@ -716,8 +739,7 @@ def _structure_one(text):
     raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
     result = json.loads(raw)
 
-    encrypted_bytes = _fernet.encrypt(json.dumps(result).encode("utf-8"))
-    _STRUCTURE_CACHE[cache_key] = encrypted_bytes
+    _cache_put(cache_key, result)
     return result
 
 
@@ -1061,7 +1083,7 @@ def classify_status_answer(status_text):
     if key in KNOWN_AMBIGUOUS_VALUES:
         return "ambiguous"
 
-    if key in _STATUS_CLASSIFICATION_CACHE:
+    if CACHE_ENABLED and key in _STATUS_CLASSIFICATION_CACHE:
         return _STATUS_CLASSIFICATION_CACHE[key]
 
     if not ANTHROPIC_API_KEY:
@@ -1095,7 +1117,8 @@ def classify_status_answer(status_text):
     except Exception:
         result = "unknown"  # fail safe: API error means we genuinely don't know
 
-    _STATUS_CLASSIFICATION_CACHE[key] = result
+    if CACHE_ENABLED:
+        _STATUS_CLASSIFICATION_CACHE[key] = result
     return result
 
 
@@ -1447,14 +1470,11 @@ def _grc_model_call(system_prompt, messages, max_tokens):
 
 
 def _grc_cache_get(key):
-    blob = _STRUCTURE_CACHE.get(key)
-    if blob is None:
-        return None
-    return json.loads(_fernet.decrypt(blob).decode("utf-8"))
+    return _cache_get(key)
 
 
 def _grc_cache_put(key, result):
-    _STRUCTURE_CACHE[key] = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+    _cache_put(key, result)
 
 
 def _norm_label(s):
@@ -1827,10 +1847,8 @@ def adversarial_checklist_http():
     try:
         cache_key = hashlib.sha256((rulebook.strip() + "||" + tactics.strip() + "||" + layer).encode("utf-8")).hexdigest()
 
-        if cache_key in _STRUCTURE_CACHE:
-            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
-            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
-        else:
+        result = _cache_get(cache_key)
+        if result is None:
             if not ANTHROPIC_API_KEY:
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1842,8 +1860,7 @@ def adversarial_checklist_http():
             )
             raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
             result = json.loads(raw)
-            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
-            _STRUCTURE_CACHE[cache_key] = encrypted
+            _cache_put(cache_key, result)
 
         return jsonify(result)
 
@@ -1905,10 +1922,8 @@ def northstar_transform_http():
             (source.strip() + "||" + subject.strip() + "||" + json.dumps(verified_result, sort_keys=True)).encode("utf-8")
         ).hexdigest()
 
-        if cache_key in _STRUCTURE_CACHE:
-            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
-            structured = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
-        else:
+        structured = _cache_get(cache_key)
+        if structured is None:
             if not ANTHROPIC_API_KEY:
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1921,8 +1936,7 @@ def northstar_transform_http():
             )
             raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
             structured = json.loads(raw)
-            encrypted = _fernet.encrypt(json.dumps(structured).encode("utf-8"))
-            _STRUCTURE_CACHE[cache_key] = encrypted
+            _cache_put(cache_key, structured)
 
         return jsonify({
             "goal": structured.get("goal", ""),
