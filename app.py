@@ -50,13 +50,6 @@ if _CACHE_KEY:
 else:
     _fernet = Fernet(Fernet.generate_key())
 
-# Result cache switch. DEFAULT OFF: nothing derived from a request is kept
-# after the response has been returned. Set the environment variable
-# CACHE_ENABLED=true only for demos (identical input then returns the stored
-# structure). To turn it off again, set it back to false (or remove it) and
-# restart the app. The cache lives in memory only, so a restart also empties it.
-CACHE_ENABLED = os.environ.get("CACHE_ENABLED", "false").strip().lower() == "true"
-
 SYSTEM_PROMPT = """You are a CGOSTI Architect for Mighty Units Ltd. CGOSTI is a universal framework for comprehension and innovation, originally derived from The Almighty Board Game by Osayuki Joseph Idehen.
 
 CGOSTI ORIGINS:
@@ -367,25 +360,44 @@ SYSTEM_PROMPT_AUDIT_COMPARE = """You are the CGOSTI Policy Audit Comparator for 
 
 You are given two CGOSTI structures — a SOURCE (the canonical policy baseline) and a SUBJECT (the document under audit). Both have already been transformed into CGOSTI structure (Goal, Objectives, Strategy, Tactics).
 
-Your task: compare the SOURCE structure against the SUBJECT structure, field by field, and classify each element into exactly one of three states:
+UNIT OF COMPARISON: every individual item — the goal statement, each objective, the strategy, and each field inside tactics (for example "worker.site"). Each item receives exactly ONE finding and exactly ONE status.
 
-1. MATCH (green) — the element is present in both SOURCE and SUBJECT with materially the same meaning.
-2. DRIFTED (amber) — the element is present in both, but the SUBJECT version has diverged from the SOURCE in a way that changes its meaning, scope, or requirement.
-3. MISSING_OR_MIXED (red) — either the element from SOURCE is entirely absent from SUBJECT (missing), or the SUBJECT contains content that does not correspond to anything in SOURCE and appears to have been blended in from an unrelated context (mixed).
+There are six statuses.
 
-EXHAUSTIVENESS REQUIREMENT: You must generate one finding for EVERY individual field present in either SOURCE or SUBJECT tactics, objectives, goal and strategy — not just the ones that seem most significant. If SOURCE tactics has a "worker.site" field, that field must have its own finding entry, even if the same underlying difference is also reflected elsewhere. Do not summarise multiple fields into fewer findings than the number of fields that actually exist. Every field the user could see in the raw structure must be traceable to exactly one finding.
+WITHIN-DOCUMENT STATUSES — decide these first, separately inside the SOURCE and inside the SUBJECT:
 
-NO DUPLICATES REQUIREMENT: Each distinct SOURCE field must appear in EXACTLY ONE finding — never zero, never more than one. Before finalising your output, check every finding's source_excerpt: no two findings may have the same or overlapping source_excerpt. If you notice you are about to describe the same SOURCE field a second time, do not create a second finding — you have already covered it. A field's classification (match / drifted / missing_or_mixed) must be internally consistent — never assign two different classifications to the same field pair.
+1. DUPLICATE — inside ONE document, the SAME field name carries the SAME meaning more than once (identical wording or reworded). Flag every repeat after the first. The first occurrence is NOT a duplicate; it continues to the cross-document step below.
+2. MIXED — inside ONE document, DIFFERENT field names carry the SAME meaning. Flag every later one. The first occurrence is NOT mixed; it continues to the cross-document step below.
 
-QUOTING REQUIREMENT: source_excerpt and subject_excerpt must be an exact, character-for-character quote taken directly from the SOURCE and SUBJECT structures provided to you — copy the text exactly as it appears, including the same labels, spacing and punctuation. Do not paraphrase, reword, or summarise the excerpt text, even slightly. If a field is a single line such as "worker.site: Northstar Central", the excerpt must be exactly that string, not a rephrased description of it.
+CROSS-DOCUMENT STATUSES — decide these for every item that was not flagged DUPLICATE or MIXED:
 
-For every finding, state clearly which of the three categories it belongs to, quote the specific SOURCE and SUBJECT text being compared (briefly, not the full document), and give one concise recommendation for resolving it if it is DRIFTED or MISSING_OR_MIXED.
+3. CHANGED — the SAME field exists in both SOURCE and SUBJECT but with a DIFFERENT meaning (a different value, status, date, scope or requirement).
+4. MATCH — the item exists in both SOURCE and SUBJECT with the same meaning. The wording may differ, and the field name may differ; if the meaning is the same, it is a MATCH. A SOURCE field and a SUBJECT field with different names but the same meaning is a plain MATCH, never MIXED.
+5. MISSING — the item exists in SOURCE and has no counterpart in SUBJECT.
+6. DRIFTED — the item exists in SUBJECT and has no counterpart in SOURCE.
+
+PRECEDENCE when more than one status could apply to the same item: Duplicate, Mixed, Changed, Match, Missing, Drifted — apply the first that fits. Never report one item under two statuses. A field that exists in both documents with different values is CHANGED only — do not also report it as MISSING and DRIFTED.
+
+EXHAUSTIVENESS REQUIREMENT: every individual item present in either SOURCE or SUBJECT goal, objectives, strategy and tactics must be traceable to exactly one finding. Do not summarise several items into one finding. A SOURCE item and its SUBJECT counterpart are covered together by a single finding (status MATCH or CHANGED, or one MISSING/DRIFTED finding when there is no counterpart).
+
+NO DUPLICATE FINDINGS REQUIREMENT: never create two findings for the same item. Before finalising, check that no two findings describe the same item.
+
+QUOTING REQUIREMENT: source_excerpt, subject_excerpt and related_excerpt must be exact, character-for-character quotes copied from the SOURCE or SUBJECT structure provided — same labels, spacing and punctuation. Do not paraphrase. If an excerpt does not apply, use an empty string.
+
+HOW TO FILL THE EXCERPT FIELDS:
+- MATCH or CHANGED: document = "both"; source_excerpt = the SOURCE item; subject_excerpt = the SUBJECT item.
+- MISSING: document = "source"; source_excerpt = the SOURCE item; subject_excerpt = "".
+- DRIFTED: document = "subject"; source_excerpt = ""; subject_excerpt = the SUBJECT item.
+- DUPLICATE or MIXED found in the SOURCE: document = "source"; source_excerpt = the repeated (later) item; related_excerpt = the first occurrence it repeats; subject_excerpt = "".
+- DUPLICATE or MIXED found in the SUBJECT: document = "subject"; subject_excerpt = the repeated (later) item; related_excerpt = the first occurrence it repeats; source_excerpt = "".
+
+Give one concise recommendation for every finding whose status is not MATCH (for MATCH use an empty string).
 
 Return ONLY valid JSON. No markdown. No backticks.
 Keys:
-  findings (array of objects, each with: layer [one of "goal","objectives","strategy","tactics"], status ["match","drifted","missing_or_mixed"], source_excerpt, subject_excerpt, recommendation),
+  findings (array of objects, each with: layer [one of "goal","objectives","strategy","tactics"], status ["match","missing","changed","drifted","mixed","duplicate"], document ["both","source","subject"], source_excerpt, subject_excerpt, related_excerpt, recommendation),
   summary (string — one paragraph overview of overall compliance health),
-  match_count (integer), drifted_count (integer), missing_or_mixed_count (integer)."""
+  match_count, missing_count, changed_count, drifted_count, mixed_count, duplicate_count (integers)."""
 
 MCP_SERVER_INFO = {
     "protocolVersion": "2024-11-05",
@@ -696,23 +708,6 @@ def call_health(subject):
 _STRUCTURE_CACHE = {}
 
 
-def _cache_get(key):
-    """Return the cached result for key, or None. Always None when CACHE_ENABLED is off."""
-    if not CACHE_ENABLED:
-        return None
-    blob = _STRUCTURE_CACHE.get(key)
-    if blob is None:
-        return None
-    return json.loads(_fernet.decrypt(blob).decode("utf-8"))
-
-
-def _cache_put(key, value):
-    """Store value (encrypted, in memory). Does nothing when CACHE_ENABLED is off."""
-    if not CACHE_ENABLED:
-        return
-    _STRUCTURE_CACHE[key] = _fernet.encrypt(json.dumps(value).encode("utf-8"))
-
-
 def _structure_one(text):
     """
     Structure a single document by calling Claude directly — no detour through
@@ -723,9 +718,10 @@ def _structure_one(text):
     """
     cache_key = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if cache_key in _STRUCTURE_CACHE:
+        encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+        decrypted_json = _fernet.decrypt(encrypted_bytes).decode("utf-8")
+        return json.loads(decrypted_json)
 
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not configured on the MCP server.")
@@ -739,29 +735,106 @@ def _structure_one(text):
     raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
     result = json.loads(raw)
 
-    _cache_put(cache_key, result)
+    encrypted_bytes = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+    _STRUCTURE_CACHE[cache_key] = encrypted_bytes
     return result
+
+
+# Six audit states, in precedence order (highest first). Compliant only when
+# every non-match count is zero.
+AUDIT_STATUS_PRECEDENCE = ["duplicate", "mixed", "changed", "match", "missing", "drifted"]
+AUDIT_NON_MATCH_STATUSES = ["missing", "changed", "drifted", "mixed", "duplicate"]
+
+
+def _norm_excerpt(value):
+    return " ".join((value or "").split()).lower()
 
 
 def _dedupe_findings(findings):
     """
     Safety net against duplicate/contradictory findings from the comparison
-    step — e.g. the same source_excerpt appearing twice with different
-    (contradictory) status values. Keeps only the FIRST finding seen for
-    each normalized source_excerpt; drops any later duplicate, regardless
-    of whether its status agrees or disagrees with the first.
+    step. Findings with an unrecognised status are skipped by the caller.
+
+    - DUPLICATE / MIXED findings describe a repeat inside one document, so
+      they are only de-duplicated against an identical finding of the same
+      status, document, repeated item and first occurrence.
+    - Every other finding is keyed by the item it describes (the SOURCE
+      excerpt when there is one, otherwise the SUBJECT excerpt). If two
+      findings describe the same item, the one whose status ranks higher in
+      AUDIT_STATUS_PRECEDENCE is kept, at the position the item first
+      appeared.
     """
-    seen = set()
-    deduped = []
+    rank = {status: i for i, status in enumerate(AUDIT_STATUS_PRECEDENCE)}
+    kept = []          # list of finding dicts, in first-seen order
+    index_by_key = {}  # cross-document key -> position in kept
+    seen_within = set()
+
     for finding in findings:
-        excerpt = (finding.get("source_excerpt") or "").strip().lower()
-        key = excerpt[:80]
-        if key and key in seen:
+        status = finding.get("status")
+        if status in ("duplicate", "mixed"):
+            doc = finding.get("document") or ""
+            repeated = finding.get("source_excerpt") if doc == "source" else finding.get("subject_excerpt")
+            key = (status, doc, _norm_excerpt(repeated), _norm_excerpt(finding.get("related_excerpt")))
+            if key in seen_within:
+                continue
+            seen_within.add(key)
+            kept.append(finding)
             continue
-        if key:
-            seen.add(key)
-        deduped.append(finding)
-    return deduped
+
+        source_part = _norm_excerpt(finding.get("source_excerpt"))
+        subject_part = _norm_excerpt(finding.get("subject_excerpt"))
+        key = ("S", source_part) if source_part else ("T", subject_part)
+        if key[1] == "":
+            kept.append(finding)
+            continue
+        if key in index_by_key:
+            pos = index_by_key[key]
+            if rank[status] < rank[kept[pos]["status"]]:
+                kept[pos] = finding
+            continue
+        index_by_key[key] = len(kept)
+        kept.append(finding)
+
+    return kept
+
+
+def _audit_verdict(counts):
+    """Compliant only if every item is a Match and every other count is 0."""
+    if any(counts.get(f"{s}_count", 0) > 0 for s in AUDIT_NON_MATCH_STATUSES):
+        return "Non Compliant"
+    if counts.get("match_count", 0) > 0:
+        return "Compliant"
+    return "Undetermined"
+
+
+def _finalise_audit(audit):
+    """Normalise statuses, de-duplicate, recount and set the verdict."""
+    cleaned = []
+    skipped = 0
+    for finding in audit.get("findings", []):
+        status = (finding.get("status") or "").strip().lower()
+        if status not in AUDIT_STATUS_PRECEDENCE:
+            skipped += 1
+            continue
+        finding["status"] = status
+        finding.setdefault("related_excerpt", "")
+        if not finding.get("document"):
+            finding["document"] = (
+                "source" if status == "missing" else
+                "subject" if status == "drifted" else "both"
+            )
+        cleaned.append(finding)
+
+    audit["findings"] = _dedupe_findings(cleaned)
+    for status in AUDIT_STATUS_PRECEDENCE:
+        audit[f"{status}_count"] = sum(1 for f in audit["findings"] if f["status"] == status)
+    audit["verdict"] = _audit_verdict(audit)
+    if skipped:
+        audit["warnings"] = [f"{skipped} finding(s) with an unrecognised status were ignored."]
+        # An ignored finding could hide a problem, so never report Compliant.
+        if audit["verdict"] == "Compliant":
+            audit["verdict"] = "Undetermined"
+    return audit
 
 
 def run_audit_compare(source, subject):
@@ -801,10 +874,7 @@ def run_audit_compare(source, subject):
     except json.JSONDecodeError:
         return {"error": "The comparison response was too long and got cut off. Try shorter documents."}
 
-    audit["findings"] = _dedupe_findings(audit.get("findings", []))
-    audit["match_count"] = sum(1 for f in audit["findings"] if f.get("status") == "match")
-    audit["drifted_count"] = sum(1 for f in audit["findings"] if f.get("status") == "drifted")
-    audit["missing_or_mixed_count"] = sum(1 for f in audit["findings"] if f.get("status") == "missing_or_mixed")
+    audit = _finalise_audit(audit)
 
     return {
         "source_structure": source_structure,
@@ -824,15 +894,23 @@ def call_audit_compare(source, subject):
         out = "CGOSTI POLICY AUDIT REPORT\n"
         out += "Mighty Units Ltd · cgosti.mightyunits.com\n"
         out += "─" * 50 + "\n\n"
+        out += f"VERDICT: {audit.get('verdict', 'Undetermined').upper()}\n\n"
         out += f"SUMMARY\n{audit.get('summary', '')}\n\n"
-        out += f"Match: {audit.get('match_count', 0)}  ·  Drifted: {audit.get('drifted_count', 0)}  ·  Missing/Mixed: {audit.get('missing_or_mixed_count', 0)}\n\n"
+        out += (
+            f"Match: {audit.get('match_count', 0)}  ·  Missing: {audit.get('missing_count', 0)}  ·  "
+            f"Changed: {audit.get('changed_count', 0)}  ·  Mixed: {audit.get('mixed_count', 0)}  ·  "
+            f"Drifted: {audit.get('drifted_count', 0)}  ·  Duplicate: {audit.get('duplicate_count', 0)}\n\n"
+        )
 
-        status_icon = {"match": "🟢", "drifted": "🟡", "missing_or_mixed": "🔴"}
+        status_icon = {"match": "🟢", "missing": "🔴", "changed": "🟠",
+                       "mixed": "🟡", "drifted": "⚪", "duplicate": "🟣"}
         for finding in audit.get("findings", []):
             icon = status_icon.get(finding.get("status"), "•")
             out += f"{icon} [{finding.get('layer', '').upper()}] {finding.get('status', '').upper()}\n"
             out += f"   Source: {finding.get('source_excerpt', '')}\n"
             out += f"   Subject: {finding.get('subject_excerpt', '')}\n"
+            if finding.get("related_excerpt"):
+                out += f"   First occurrence: {finding.get('related_excerpt')}\n"
             if finding.get("recommendation"):
                 out += f"   Recommendation: {finding.get('recommendation')}\n"
             out += "\n"
@@ -1083,7 +1161,7 @@ def classify_status_answer(status_text):
     if key in KNOWN_AMBIGUOUS_VALUES:
         return "ambiguous"
 
-    if CACHE_ENABLED and key in _STATUS_CLASSIFICATION_CACHE:
+    if key in _STATUS_CLASSIFICATION_CACHE:
         return _STATUS_CLASSIFICATION_CACHE[key]
 
     if not ANTHROPIC_API_KEY:
@@ -1117,8 +1195,7 @@ def classify_status_answer(status_text):
     except Exception:
         result = "unknown"  # fail safe: API error means we genuinely don't know
 
-    if CACHE_ENABLED:
-        _STATUS_CLASSIFICATION_CACHE[key] = result
+    _STATUS_CLASSIFICATION_CACHE[key] = result
     return result
 
 
@@ -1470,11 +1547,14 @@ def _grc_model_call(system_prompt, messages, max_tokens):
 
 
 def _grc_cache_get(key):
-    return _cache_get(key)
+    blob = _STRUCTURE_CACHE.get(key)
+    if blob is None:
+        return None
+    return json.loads(_fernet.decrypt(blob).decode("utf-8"))
 
 
 def _grc_cache_put(key, result):
-    _cache_put(key, result)
+    _STRUCTURE_CACHE[key] = _fernet.encrypt(json.dumps(result).encode("utf-8"))
 
 
 def _norm_label(s):
@@ -1847,8 +1927,10 @@ def adversarial_checklist_http():
     try:
         cache_key = hashlib.sha256((rulebook.strip() + "||" + tactics.strip() + "||" + layer).encode("utf-8")).hexdigest()
 
-        result = _cache_get(cache_key)
-        if result is None:
+        if cache_key in _STRUCTURE_CACHE:
+            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+            result = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
+        else:
             if not ANTHROPIC_API_KEY:
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1860,7 +1942,8 @@ def adversarial_checklist_http():
             )
             raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
             result = json.loads(raw)
-            _cache_put(cache_key, result)
+            encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
+            _STRUCTURE_CACHE[cache_key] = encrypted
 
         return jsonify(result)
 
@@ -1922,8 +2005,10 @@ def northstar_transform_http():
             (source.strip() + "||" + subject.strip() + "||" + json.dumps(verified_result, sort_keys=True)).encode("utf-8")
         ).hexdigest()
 
-        structured = _cache_get(cache_key)
-        if structured is None:
+        if cache_key in _STRUCTURE_CACHE:
+            encrypted_bytes = _STRUCTURE_CACHE[cache_key]
+            structured = json.loads(_fernet.decrypt(encrypted_bytes).decode("utf-8"))
+        else:
             if not ANTHROPIC_API_KEY:
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -1936,7 +2021,8 @@ def northstar_transform_http():
             )
             raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
             structured = json.loads(raw)
-            _cache_put(cache_key, structured)
+            encrypted = _fernet.encrypt(json.dumps(structured).encode("utf-8"))
+            _STRUCTURE_CACHE[cache_key] = encrypted
 
         return jsonify({
             "goal": structured.get("goal", ""),
