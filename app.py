@@ -807,7 +807,7 @@ def _audit_verdict(counts):
     return "Undetermined"
 
 
-def _finalise_audit(audit):
+def _finalise_audit(audit, dedupe=True):
     """Normalise statuses, de-duplicate, recount and set the verdict."""
     cleaned = []
     skipped = 0
@@ -825,7 +825,7 @@ def _finalise_audit(audit):
             )
         cleaned.append(finding)
 
-    audit["findings"] = _dedupe_findings(cleaned)
+    audit["findings"] = _dedupe_findings(cleaned) if dedupe else cleaned
     for status in AUDIT_STATUS_PRECEDENCE:
         audit[f"{status}_count"] = sum(1 for f in audit["findings"] if f["status"] == status)
     audit["verdict"] = _audit_verdict(audit)
@@ -837,44 +837,366 @@ def _finalise_audit(audit):
     return audit
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CGOSTI Document Audit — deterministic text comparison first, Claude second.
+#
+# Purpose: audit two versions of the same document (typically two AI
+# generations produced at different times) and catch any non-deterministic
+# variation: Missing, Changed, Drifted, Mixed and Duplicate items.
+#
+#   1. Both documents are split into items (JSON is flattened to
+#      "path: value"; prose is split into lines and long lines into sentences).
+#   2. Items that are word-for-word identical in both documents are Match.
+#      No Claude call, so identical documents are always Compliant.
+#   3. JSON only: the same path with a different value is Changed.
+#   4. Exact repeats inside one document are Duplicate.
+#   5. If only one side has items left, they are Missing (baseline) or
+#      Drifted (later run). No Claude call.
+#   6. Only when BOTH sides have items left does Claude judge them
+#      (reworded matches, changed meaning, Mixed, reworded Duplicate).
+#   7. The CGOSTI structure is produced in parallel for readability only. It
+#      never decides a finding, and the audit still returns if it fails.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Exact repeats shorter than this many words are not flagged as Duplicate
+# (headings and short labels legitimately repeat).
+DUPLICATE_MIN_WORDS = 4
+
+_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"“(\[])')
+
+AUDIT_RECOMMENDATIONS = {
+    "missing": "Present in the baseline run but absent from the later run. Restore it, or confirm the omission is intended.",
+    "drifted": "New in the later run with no counterpart in the baseline run. Confirm it is intended, or remove it.",
+    "changed": "Same field, different value or meaning between the runs. Confirm which version is correct.",
+    "duplicate": "Repeated within the same document. Remove the repeat.",
+    "mixed": "Different names carry the same meaning within the same document. Use one consistent name.",
+}
+
+SYSTEM_PROMPT_AUDIT_LEFTOVER = """You are the CGOSTI Document Audit Comparator for Mighty Units Ltd.
+
+You are given two lists of items taken from two versions of a document. They are usually two AI-generated versions of the same document produced at different times: the BASELINE run (the reference) and the LATER run. Every item that appears word-for-word in both has ALREADY been matched and removed. You only see the items that were not matched word-for-word. Decide what each remaining item is.
+
+Each item has an id: S1, S2, ... for the BASELINE run and T1, T2, ... for the LATER run.
+
+Classify every item into exactly one finding, using these six statuses:
+
+- "match": a BASELINE item and a LATER item carry the same meaning in different wording, or the same data under a different field name. Provide both ids.
+- "changed": a BASELINE item and a LATER item are about the same field or topic but the meaning is different — a different number, date, name, status value, quantity, condition, negation or requirement. Provide both ids.
+- "missing": a BASELINE item with no counterpart in the LATER list. Provide the S id only.
+- "drifted": a LATER item with no counterpart in the BASELINE list. Provide the T id only.
+- "duplicate": inside ONE list, the SAME field name or topic carries the SAME meaning more than once. Report every repeat after the first. Put the repeat's id in source_ids (if the repeat is in the BASELINE list) or subject_ids (if in the LATER list), and put the id of the first occurrence in related_id. Never mix sides in a duplicate finding.
+- "mixed": inside ONE list, DIFFERENT field names or labels carry the SAME meaning. Report every later one the same way as duplicate, with related_id set to the first.
+
+Precedence when more than one status could apply: duplicate, mixed, changed, match, missing, drifted. Apply the first that fits.
+
+Be strict. If any value, number, date, name, status, quantity, condition, negation or requirement differs, the status is "changed", not "match". Only use "match" when the meaning is genuinely the same. Never pair items by their position in the list; pair them by what they are about. An item that has a close counterpart in the other list is "match" or "changed", not "missing" plus "drifted".
+
+Every id must appear in exactly one finding. A first occurrence that a duplicate or mixed finding refers to must also appear in its own finding (match, changed, missing or drifted). Do not invent ids. Do not quote the text; refer to items by id only.
+
+Return ONLY valid JSON. No markdown. No backticks. Keys:
+  findings: array of objects, each with:
+    status: one of "match","changed","missing","drifted","duplicate","mixed"
+    source_ids: array of S ids (may be empty)
+    subject_ids: array of T ids (may be empty)
+    related_id: string — the first occurrence's id for duplicate/mixed, otherwise ""
+    recommendation: one concise sentence for every status except "match"; use "" for "match"
+  summary: one to three sentences describing HOW the two runs differ. Do not restate the matches."""
+
+
+def _norm_unit(value):
+    return " ".join(str(value).split())
+
+
+def _flatten_json(obj, path=""):
+    """Flatten parsed JSON to (path, value) pairs. Scalar lists drop the list
+    index so a reordered list still matches; lists of objects keep it so each
+    element keeps its own context."""
+    out = []
+    if isinstance(obj, dict):
+        if not obj and path:
+            out.append((path, "{}"))
+        for key, val in obj.items():
+            out.extend(_flatten_json(val, f"{path}.{key}" if path else str(key)))
+    elif isinstance(obj, list):
+        if not obj and path:
+            out.append((path, "[]"))
+        scalar_list = all(not isinstance(v, (dict, list)) for v in obj)
+        for i, val in enumerate(obj):
+            child = f"{path}[]" if scalar_list else f"{path}[{i}]"
+            out.extend(_flatten_json(val, child))
+    else:
+        text = obj if isinstance(obj, str) else json.dumps(obj)
+        out.append((path or "(value)", _norm_unit(text)))
+    return out
+
+
+def _parse_units(text):
+    """Split a document into comparable items. Returns (units, mode)."""
+    stripped = (text or "").strip()
+    if stripped[:1] in ("{", "["):
+        try:
+            data = json.loads(stripped)
+        except ValueError:
+            data = None
+        if isinstance(data, (dict, list)):
+            units = []
+            for pos, (path, value) in enumerate(_flatten_json(data)):
+                top = re.split(r"[.\[]", path, 1)[0] or "document"
+                units.append({"text": f"{path}: {value}", "path": path, "section": top, "pos": pos})
+            return units, "json"
+
+    units = []
+    section = "document"
+    for raw in stripped.splitlines():
+        line = _norm_unit(raw)
+        if not line or not re.search(r"[A-Za-z0-9]", line):
+            continue
+        if len(line.split()) <= 8 and not line.endswith((".", "!", "?")):
+            section = line[:60]
+        parts = _SENTENCE_SPLIT.split(line) if len(line) > 200 else [line]
+        for part in parts:
+            part = part.strip()
+            if part:
+                units.append({"text": part, "path": None, "section": section, "pos": len(units)})
+    return units, "text"
+
+
+def _audit_finding(status, src=None, sub=None, related=None, rec="", doc=None):
+    src = src or []
+    sub = sub or []
+    first = (src or sub)[0] if (src or sub) else None
+    if doc is None:
+        doc = "both" if (src and sub) else ("source" if src else "subject")
+    order = min(u["pos"] for u in src) if src else 10000 + min(u["pos"] for u in sub)
+    return {
+        "layer": first["section"] if first else "document",
+        "status": status,
+        "document": doc,
+        "source_excerpt": " | ".join(u["text"] for u in src),
+        "subject_excerpt": " | ".join(u["text"] for u in sub),
+        "related_excerpt": related["text"] if related else "",
+        "recommendation": rec,
+        "_order": order,
+    }
+
+
+def _split_repeats(units):
+    """Separate exact repeats (after the first occurrence) from the rest."""
+    first_seen, kept, repeats = {}, [], []
+    for u in units:
+        t = u["text"]
+        if t in first_seen and len(t.split()) >= DUPLICATE_MIN_WORDS:
+            repeats.append((u, first_seen[t]))
+        else:
+            first_seen.setdefault(t, u)
+            kept.append(u)
+    return kept, repeats
+
+
+def _deterministic_audit(src_units, sub_units, json_both):
+    """Everything that can be decided without Claude."""
+    findings = []
+    src_keep, src_rep = _split_repeats(src_units)
+    sub_keep, sub_rep = _split_repeats(sub_units)
+
+    for u, first in src_rep:
+        findings.append(_audit_finding("duplicate", src=[u], related=first,
+                                       rec=AUDIT_RECOMMENDATIONS["duplicate"], doc="source"))
+    for u, first in sub_rep:
+        findings.append(_audit_finding("duplicate", sub=[u], related=first,
+                                       rec=AUDIT_RECOMMENDATIONS["duplicate"], doc="subject"))
+
+    # Word-for-word matches (multiset, so counts must agree too).
+    pool = {}
+    for u in sub_keep:
+        pool.setdefault(u["text"], []).append(u)
+    left_src, matched_sub = [], set()
+    for u in src_keep:
+        bucket = pool.get(u["text"])
+        if bucket:
+            partner = bucket.pop(0)
+            matched_sub.add(id(partner))
+            findings.append(_audit_finding("match", src=[u], sub=[partner]))
+        else:
+            left_src.append(u)
+    left_sub = [u for u in sub_keep if id(u) not in matched_sub]
+
+    # JSON: the same path with a different value is a changed field.
+    if json_both and left_src and left_sub:
+        by_src, by_sub = {}, {}
+        for u in left_src:
+            by_src.setdefault(u["path"], []).append(u)
+        for u in left_sub:
+            by_sub.setdefault(u["path"], []).append(u)
+        paired = set()
+        for path, s_list in by_src.items():
+            t_list = by_sub.get(path)
+            if t_list and len(s_list) == 1 and len(t_list) == 1:
+                findings.append(_audit_finding("changed", src=s_list, sub=t_list,
+                                               rec=AUDIT_RECOMMENDATIONS["changed"]))
+                paired.add(id(s_list[0]))
+                paired.add(id(t_list[0]))
+        left_src = [u for u in left_src if id(u) not in paired]
+        left_sub = [u for u in left_sub if id(u) not in paired]
+
+    needs_llm = bool(left_src and left_sub)
+    if not needs_llm:
+        for u in left_src:
+            findings.append(_audit_finding("missing", src=[u], rec=AUDIT_RECOMMENDATIONS["missing"]))
+        for u in left_sub:
+            findings.append(_audit_finding("drifted", sub=[u], rec=AUDIT_RECOMMENDATIONS["drifted"]))
+        left_src, left_sub = [], []
+
+    return {"findings": findings, "left_src": left_src, "left_sub": left_sub, "needs_llm": needs_llm}
+
+
+def _judge_leftovers(left_src, left_sub):
+    """Ask Claude to classify only the items that did not match word-for-word."""
+    src_ids = {f"S{i + 1}": u for i, u in enumerate(left_src)}
+    sub_ids = {f"T{i + 1}": u for i, u in enumerate(left_sub)}
+    listing = (
+        "BASELINE items (not matched word-for-word):\n"
+        + "\n".join(f"{k}: {u['text']}" for k, u in src_ids.items())
+        + "\n\nLATER RUN items (not matched word-for-word):\n"
+        + "\n".join(f"{k}: {u['text']}" for k, u in sub_ids.items())
+    )
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=8192, temperature=0,
+        system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_LEFTOVER, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": listing}],
+    )
+    raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    return json.loads(raw), src_ids, sub_ids
+
+
+def _apply_judgement(judged, src_ids, sub_ids):
+    """Turn Claude's id-based answer into findings. Every leftover item ends
+    up in exactly one finding, whatever Claude returned."""
+    findings, warnings, used = [], [], set()
+    all_ids = {**src_ids, **sub_ids}
+    rec_for = AUDIT_RECOMMENDATIONS
+
+    for item in judged.get("findings", []):
+        status = str(item.get("status", "")).strip().lower()
+        if status not in AUDIT_STATUS_PRECEDENCE:
+            warnings.append("A finding with an unrecognised status was ignored.")
+            continue
+        s_keys = [k for k in (item.get("source_ids") or []) if k in src_ids and k not in used]
+        t_keys = [k for k in (item.get("subject_ids") or []) if k in sub_ids and k not in used]
+        if not s_keys and not t_keys:
+            continue
+        used.update(s_keys)
+        used.update(t_keys)
+        related = all_ids.get(item.get("related_id"))
+        rec = (item.get("recommendation") or "").strip() or rec_for.get(status, "")
+
+        if status in ("duplicate", "mixed"):
+            for k in s_keys:
+                findings.append(_audit_finding(status, src=[src_ids[k]], related=related, rec=rec, doc="source"))
+            for k in t_keys:
+                findings.append(_audit_finding(status, sub=[sub_ids[k]], related=related, rec=rec, doc="subject"))
+        elif status in ("match", "changed"):
+            if s_keys and t_keys:
+                findings.append(_audit_finding(status, src=[src_ids[k] for k in s_keys],
+                                               sub=[sub_ids[k] for k in t_keys], rec=rec))
+            else:
+                warnings.append(f"A '{status}' finding had items on one side only and was reported as missing or drifted.")
+                for k in s_keys:
+                    findings.append(_audit_finding("missing", src=[src_ids[k]], rec=rec_for["missing"]))
+                for k in t_keys:
+                    findings.append(_audit_finding("drifted", sub=[sub_ids[k]], rec=rec_for["drifted"]))
+        elif status == "missing":
+            for k in s_keys:
+                findings.append(_audit_finding("missing", src=[src_ids[k]], rec=rec))
+            for k in t_keys:
+                findings.append(_audit_finding("drifted", sub=[sub_ids[k]], rec=rec_for["drifted"]))
+        else:  # drifted
+            for k in t_keys:
+                findings.append(_audit_finding("drifted", sub=[sub_ids[k]], rec=rec))
+            for k in s_keys:
+                findings.append(_audit_finding("missing", src=[src_ids[k]], rec=rec_for["missing"]))
+
+    uncovered = [k for k in list(src_ids) + list(sub_ids) if k not in used]
+    if uncovered:
+        warnings.append(f"{len(uncovered)} item(s) were not classified by Claude and were reported as missing or drifted.")
+        for k in uncovered:
+            if k in src_ids:
+                findings.append(_audit_finding("missing", src=[src_ids[k]], rec=rec_for["missing"]))
+            else:
+                findings.append(_audit_finding("drifted", sub=[sub_ids[k]], rec=rec_for["drifted"]))
+
+    return findings, list(dict.fromkeys(warnings)), (judged.get("summary") or "").strip()
+
+
+def _audit_summary(audit, n_src, n_sub, overview):
+    labels = [("missing", "missing"), ("changed", "changed"), ("drifted", "drifted"),
+              ("mixed", "mixed"), ("duplicate", "duplicate")]
+    if audit["verdict"] == "Compliant":
+        text = f"The later run matches the baseline run on every item ({n_src} baseline items, {n_sub} later-run items compared)."
+    else:
+        bits = [f"{audit[k + '_count']} {name}" for k, name in labels if audit.get(k + "_count")]
+        text = (f"Compared {n_src} baseline items with {n_sub} later-run items: "
+                f"{audit['match_count']} matched; " + (", ".join(bits) if bits else "no other findings") + ".")
+    if overview:
+        text += " " + overview
+    return text
+
+
+def _safe_structure(text):
+    """CGOSTI structure for display only. A failure never blocks the audit."""
+    try:
+        return _structure_one(text), None
+    except Exception as e:
+        return None, f"CGOSTI structure unavailable ({type(e).__name__}); the findings are not affected."
+
+
 def run_audit_compare(source, subject):
     """
-    Core audit-compare logic. Returns a dict, not a formatted string, so both
-    the MCP tool (call_audit_compare) and the plain HTTP route can format it
-    however they need.
+    Core document-audit logic. Returns a dict (not a formatted string) so both
+    the MCP tool (call_audit_compare) and the plain HTTP route can format it.
     """
     if not ANTHROPIC_API_KEY:
         return {"error": "ANTHROPIC_API_KEY not configured on the MCP server."}
 
-    # Run both structuring calls in parallel — they're independent of each
-    # other, only the comparison step needs both results. This roughly
-    # halves total wait time and reduces the risk of hitting Render's
-    # platform-level proxy timeout (502).
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        source_future = executor.submit(_structure_one, source)
-        subject_future = executor.submit(_structure_one, subject)
-        source_structure = source_future.result()
-        subject_structure = subject_future.result()
+    src_units, src_mode = _parse_units(source)
+    sub_units, sub_mode = _parse_units(subject)
+    if not src_units or not sub_units:
+        return {"error": "Both documents need readable content."}
 
-    if "error" in source_structure or "error" in subject_structure:
-        return {"error": "Could not structure one of the documents."}
+    plan = _deterministic_audit(src_units, sub_units, src_mode == "json" and sub_mode == "json")
+    same_text = (source or "").strip() == (subject or "").strip()
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    compare_msg = client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=4096, temperature=0,
-        system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_COMPARE, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content":
-            "SOURCE structure:\n" + json.dumps(source_structure) +
-            "\n\nSUBJECT structure:\n" + json.dumps(subject_structure)}]
-    )
-    raw_compare = compare_msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    judged = None
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        f_src = executor.submit(_safe_structure, source)
+        f_sub = f_src if same_text else executor.submit(_safe_structure, subject)
+        f_llm = executor.submit(_judge_leftovers, plan["left_src"], plan["left_sub"]) if plan["needs_llm"] else None
+        source_structure, w_src = f_src.result()
+        subject_structure, w_sub = f_sub.result()
+        if f_llm is not None:
+            try:
+                judged = f_llm.result()
+            except Exception:
+                return {"error": "The differing items could not be compared (the response was cut off or invalid). Try again, or use shorter documents."}
 
-    try:
-        audit = json.loads(raw_compare)
-    except json.JSONDecodeError:
-        return {"error": "The comparison response was too long and got cut off. Try shorter documents."}
+    findings = list(plan["findings"])
+    warnings = [w for w in (w_src, w_sub) if w]
+    overview = ""
+    if judged is not None:
+        extra, judge_warnings, overview = _apply_judgement(*judged)
+        findings.extend(extra)
+        warnings.extend(judge_warnings)
 
-    audit = _finalise_audit(audit)
+    findings.sort(key=lambda f: f["_order"])
+    for f in findings:
+        f.pop("_order", None)
+
+    audit = _finalise_audit({"findings": findings}, dedupe=False)
+    audit["summary"] = _audit_summary(audit, len(src_units), len(sub_units), overview)
+    audit["warnings"] = list(dict.fromkeys(audit.get("warnings", []) + warnings))
+    if not audit["warnings"]:
+        audit.pop("warnings")
 
     return {
         "source_structure": source_structure,
@@ -888,10 +1210,10 @@ def call_audit_compare(source, subject):
     try:
         result = run_audit_compare(source, subject)
         if "error" in result:
-            return f"CGOSTI Policy Audit error: {result['error']}"
+            return f"CGOSTI Document Audit error: {result['error']}"
 
         audit = result.get("audit", {})
-        out = "CGOSTI POLICY AUDIT REPORT\n"
+        out = "CGOSTI DOCUMENT AUDIT REPORT\n"
         out += "Mighty Units Ltd · cgosti.mightyunits.com\n"
         out += "─" * 50 + "\n\n"
         out += f"VERDICT: {audit.get('verdict', 'Undetermined').upper()}\n\n"
@@ -907,8 +1229,8 @@ def call_audit_compare(source, subject):
         for finding in audit.get("findings", []):
             icon = status_icon.get(finding.get("status"), "•")
             out += f"{icon} [{finding.get('layer', '').upper()}] {finding.get('status', '').upper()}\n"
-            out += f"   Source: {finding.get('source_excerpt', '')}\n"
-            out += f"   Subject: {finding.get('subject_excerpt', '')}\n"
+            out += f"   Baseline: {finding.get('source_excerpt', '')}\n"
+            out += f"   Later run: {finding.get('subject_excerpt', '')}\n"
             if finding.get("related_excerpt"):
                 out += f"   First occurrence: {finding.get('related_excerpt')}\n"
             if finding.get("recommendation"):
@@ -921,9 +1243,9 @@ def call_audit_compare(source, subject):
         return out
 
     except requests.exceptions.Timeout:
-        return "CGOSTI Policy Audit timed out. Please try again."
+        return "CGOSTI Document Audit timed out. Please try again."
     except Exception as e:
-        return f"CGOSTI Policy Audit error: {str(e)}"
+        return f"CGOSTI Document Audit error: {str(e)}"
 
 
 # ── Routes ──

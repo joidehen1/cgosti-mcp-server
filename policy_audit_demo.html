@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CGOSTI Policy Audit System — Demo</title>
+<title>CGOSTI Document Audit System — Demo</title>
 <style>
   :root {
     --navy: #0a0a2e; --navy2: #0d0d2e; --gold: #e8a838; --cyan: #00b4d8;
@@ -101,6 +101,7 @@
     display: flex; align-items: center; gap: 8px; padding: 8px 16px;
     border-radius: 8px; font-size: 12px; font-weight: 700;
   }
+  .warnings { font-size: 11px; color: var(--amber); margin-top: 12px; line-height: 1.6; }
   .count-pill.match { background: rgba(16,185,129,0.12); color: var(--green); border: 1px solid rgba(16,185,129,0.35); }
   .count-pill.missing { background: rgba(230,57,70,0.12); color: var(--red); border: 1px solid rgba(230,57,70,0.35); }
   .count-pill.changed { background: rgba(251,146,60,0.12); color: var(--orange); border: 1px solid rgba(251,146,60,0.35); }
@@ -191,20 +192,20 @@
     <polygon points="90,25 50,46 50,96 90,75" fill="none" stroke="#0a0a2e" stroke-width="2"/>
   </svg>
   <div>
-    <div class="header-title">CGOSTI POLICY AUDIT SYSTEM</div>
+    <div class="header-title">CGOSTI DOCUMENT AUDIT SYSTEM</div>
     <div class="header-sub">MIGHTY UNITS LTD · INTERNAL DEMO — NOT PART OF PUBLIC TRANSFORMER</div>
   </div>
   <div class="badge-demo">DEMO BUILD</div>
 </header>
 
 <main>
-  <div class="tagline">Compare a Source document (the policy baseline) against a Subject document (the document under audit) — every element classified as Match, Missing, Changed, Drifted, Mixed or Duplicate, with a Compliant / Non Compliant verdict.</div>
+  <div class="tagline">Compare a Baseline run (the first AI-generated version of a document) against a Later run (a later version of the same document). Anything word-for-word identical is confirmed as a Match instantly; every difference is classified as Missing, Changed, Drifted, Mixed or Duplicate, with a Compliant / Non Compliant verdict.</div>
 
   <div class="grid-two">
     <div class="doc-panel source">
-      <div class="doc-label">SOURCE DOCUMENT</div>
-      <div class="doc-sub">The canonical policy baseline — the source of truth</div>
-      <textarea id="sourceText" placeholder="Paste or type the baseline policy document here..."></textarea>
+      <div class="doc-label">BASELINE RUN</div>
+      <div class="doc-sub">The first AI-generated version — the reference</div>
+      <textarea id="sourceText" placeholder="Paste or upload the baseline run here..."></textarea>
       <div class="upload-row">
         <button class="upload-btn" onclick="document.getElementById('sourceFile').click()">↑ UPLOAD</button>
         <input type="file" id="sourceFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'sourceText')">
@@ -212,9 +213,9 @@
       </div>
     </div>
     <div class="doc-panel subject">
-      <div class="doc-label">SUBJECT DOCUMENT</div>
-      <div class="doc-sub">The document being audited against the source</div>
-      <textarea id="subjectText" placeholder="Paste or type the document under audit here..."></textarea>
+      <div class="doc-label">LATER RUN</div>
+      <div class="doc-sub">A later AI-generated version — audited against the baseline</div>
+      <textarea id="subjectText" placeholder="Paste or upload the later run here..."></textarea>
       <div class="upload-row">
         <button class="upload-btn" onclick="document.getElementById('subjectFile').click()">↑ UPLOAD</button>
         <input type="file" id="subjectFile" style="display:none" accept=".txt,.md,.json" onchange="handleFileUpload(this,'subjectText')">
@@ -234,11 +235,11 @@
 
   <div class="structure-grid" id="structureGrid" style="display:none">
     <div class="structure-panel source">
-      <div class="structure-panel-title">SOURCE — CGOSTI STRUCTURE</div>
+      <div class="structure-panel-title">BASELINE RUN — CGOSTI STRUCTURE</div>
       <div id="sourceStructureBody"></div>
     </div>
     <div class="structure-panel subject">
-      <div class="structure-panel-title">SUBJECT — CGOSTI STRUCTURE</div>
+      <div class="structure-panel-title">LATER RUN — CGOSTI STRUCTURE</div>
       <div id="subjectStructureBody"></div>
     </div>
   </div>
@@ -250,6 +251,7 @@
       <div class="summary-title">AUDIT SUMMARY</div>
       <div class="summary-text" id="summaryText"></div>
       <div class="counts-row" id="countsRow"></div>
+      <div class="warnings" id="warningsBox"></div>
     </div>
     <div id="findingsList"></div>
     <div class="export-row">
@@ -285,13 +287,14 @@
     const source = document.getElementById('sourceText').value.trim();
     const subject = document.getElementById('subjectText').value.trim();
     if (!source || !subject) {
-      setStatus('⚠ Please provide both a Source and Subject document before transforming.');
+      setStatus('⚠ Please provide both a Baseline run and a Later run before transforming.');
       return;
     }
     const btn = document.getElementById('transformBtn');
     btn.disabled = true;
-    setStatus('Transforming both documents into CGOSTI structure... (calling ' + API_BASE + '/audit-compare)');
+    setStatus('Comparing both runs and building the CGOSTI structures... (calling ' + API_BASE + '/audit-compare)');
     hideErrorBox();
+    resetResults();
 
     try {
       const res = await fetch(API_BASE + '/audit-compare', {
@@ -318,14 +321,14 @@
       lastAuditResult = data;
       renderStructurePanels(data.source_structure, data.subject_structure);
       document.getElementById('structureGrid').style.display = 'grid';
-      setStatus('✅ Transform complete. Both structures displayed below — click Audit to compare.');
+      setStatus('✅ Transform complete. Structures displayed below — click Audit to see the findings.');
       document.getElementById('auditBtn').disabled = false;
     } catch (e) {
       // Show the REAL error — name, message and (if present) a network-level hint —
       // directly on the page, so no DevTools access is needed to see it.
       let hint = '';
       if (e instanceof TypeError) {
-        hint = '\n\nThis is usually either: (1) a CORS block, (2) the server is unreachable at this address, or (3) mixed http/https content blocking the request.';
+        hint = '\n\nThis is usually either: (1) the request timed out on the server (large documents), (2) a CORS block, (3) the server is unreachable at this address, or (4) mixed http/https content blocking the request.';
       }
       showErrorBox('JavaScript error while calling ' + API_BASE + '/audit-compare:\n\n' +
         'Name: ' + e.name + '\n' +
@@ -343,6 +346,15 @@
   }
   function hideErrorBox() {
     document.getElementById('errorBox').style.display = 'none';
+  }
+  function resetResults() {
+    // Never show results from an earlier run next to a new (or failed) Transform.
+    lastAuditResult = null;
+    ['resultsArea', 'reportMeta', 'structureGrid'].forEach(function(id) {
+      document.getElementById(id).style.display = 'none';
+    });
+    document.getElementById('auditBtn').disabled = true;
+    document.getElementById('reportBtn').disabled = true;
   }
 
   function structFieldToLines(prefix, value) {
@@ -366,6 +378,9 @@
       { key: 'tactics', label: 'TACTICS' }
     ];
     function buildPanel(struct) {
+      if (!struct || !Object.keys(struct).length) {
+        return '<div class="struct-line">CGOSTI structure unavailable for this run. The findings are not affected.</div>';
+      }
       var html = '';
       layers.forEach(function(l) {
         html += '<div class="struct-layer-label">' + l.label + '</div>';
@@ -429,6 +444,7 @@
 
   function runAudit() {
     if (!lastAuditResult) { setStatus('⚠ Run Transform first.'); return; }
+    hideErrorBox();
     setStatus('Rendering audit findings...');
     renderResults(lastAuditResult);
     highlightStructurePanels((lastAuditResult.audit || {}).findings);
@@ -461,6 +477,8 @@
       `<div class="count-pill ${st.key}">${st.icon} ${audit[st.key + '_count'] || 0} ${st.label}</div>`
     ).join('');
 
+    document.getElementById('warningsBox').textContent = (audit.warnings || []).map(function(w) { return '⚠ ' + w; }).join('  ');
+
     const icons = {};
     STATES.forEach(st => { icons[st.key] = st.icon; });
 
@@ -472,8 +490,8 @@
           <span class="finding-layer">[${escapeHtml((f.layer||'').toUpperCase())}]</span>
           <span class="finding-status ${escapeHtml(f.status || '')}">${escapeHtml((f.status||'').toUpperCase())}</span>
         </div>
-        <div class="excerpt-row"><span class="excerpt-label">Source:</span> ${escapeHtml(f.source_excerpt) || '—'}</div>
-        <div class="excerpt-row"><span class="excerpt-label">Subject:</span> ${escapeHtml(f.subject_excerpt) || '—'}</div>
+        <div class="excerpt-row"><span class="excerpt-label">Baseline:</span> ${escapeHtml(f.source_excerpt) || '—'}</div>
+        <div class="excerpt-row"><span class="excerpt-label">Later run:</span> ${escapeHtml(f.subject_excerpt) || '—'}</div>
         ${f.related_excerpt ? `<div class="excerpt-row"><span class="excerpt-label">First occurrence:</span> ${escapeHtml(f.related_excerpt)}</div>` : ''}
         ${f.recommendation ? `<div class="recommendation">↳ ${escapeHtml(f.recommendation)}</div>` : ''}
       </div>
@@ -488,7 +506,7 @@
     meta.innerHTML =
       `<strong>AUDIT REPORT</strong><br>` +
       `Date: ${now.toLocaleDateString('en-GB')} &nbsp;·&nbsp; Time: ${now.toLocaleTimeString('en-GB')}<br>` +
-      `Author: Mighty Units Ltd — CGOSTI Policy Audit System<br>` +
+      `Author: Mighty Units Ltd — CGOSTI Document Audit System<br>` +
       `Generated: ${lastAuditResult.generated_at || now.toISOString()}`;
     setStatus('✅ Audit report generated — ready to export.');
   }
@@ -497,8 +515,8 @@
     if (!lastAuditResult) { setStatus('⚠ Generate the audit report first.'); return; }
     const audit = lastAuditResult.audit || {};
     const countsLine = STATES.map(st => `${st.label}: ${audit[st.key + '_count'] || 0}`).join('  ·  ');
-    const text = `CGOSTI POLICY AUDIT REPORT\nMighty Units Ltd\n\nVERDICT: ${(audit.verdict || 'Undetermined').toUpperCase()}\n${countsLine}\n\nSUMMARY\n${audit.summary}\n\n` +
-      (audit.findings || []).map(f => `[${f.layer}] ${f.status}\nSource: ${f.source_excerpt}\nSubject: ${f.subject_excerpt}\n` +
+    const text = `CGOSTI DOCUMENT AUDIT REPORT\nMighty Units Ltd\n\nVERDICT: ${(audit.verdict || 'Undetermined').toUpperCase()}\n${countsLine}\n\nSUMMARY\n${audit.summary}\n\n` +
+      (audit.findings || []).map(f => `[${f.layer}] ${f.status}\nBaseline: ${f.source_excerpt}\nLater run: ${f.subject_excerpt}\n` +
         (f.related_excerpt ? `First occurrence: ${f.related_excerpt}\n` : '') +
         `Recommendation: ${f.recommendation || 'N/A'}\n`).join('\n');
 
