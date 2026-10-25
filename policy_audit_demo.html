@@ -91,6 +91,11 @@
     white-space: pre-wrap; word-break: break-word; font-family: 'Courier New', monospace; line-height: 1.6;
   }
 
+  #noticeBox {
+    display: none; background: rgba(244,162,97,0.08); border: 1px solid rgba(244,162,97,0.35);
+    border-radius: 8px; padding: 12px 16px; margin: 0 0 20px; font-size: 11px; color: var(--amber);
+    line-height: 1.7; word-break: break-word;
+  }
   #resultsArea { display: none; }
   .summary-box {
     background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
@@ -237,6 +242,7 @@
 
   <div class="status-line" id="statusLine"></div>
   <div id="errorBox"></div>
+  <div id="noticeBox"></div>
 
   <div class="structure-grid" id="structureGrid" style="display:none">
     <div class="structure-panel source">
@@ -332,6 +338,13 @@
       setStatus(built
         ? '✅ Transform complete. CGOSTI structures displayed below — click Audit to see the findings.'
         : '✅ Transform complete. Plain-text comparison settled it — no CGOSTI structure was needed. Click Audit to see the findings.');
+      var notices = ((data.audit || {}).warnings || []);
+      var nb = document.getElementById('noticeBox');
+      if (notices.length) {
+        nb.textContent = notices.map(function(w) { return '⚠ ' + w; }).join('\n');
+        nb.style.whiteSpace = 'pre-wrap';
+        nb.style.display = 'block';
+      }
       document.getElementById('auditBtn').disabled = false;
     } catch (e) {
       // Show the REAL error — name, message and (if present) a network-level hint —
@@ -360,6 +373,7 @@
   function resetResults() {
     // Never show results from an earlier run next to a new (or failed) Transform.
     lastAuditResult = null;
+    document.getElementById('noticeBox').style.display = 'none';
     ['resultsArea', 'reportMeta', 'structureGrid'].forEach(function(id) {
       document.getElementById(id).style.display = 'none';
     });
@@ -389,7 +403,7 @@
     ];
     function buildPanel(struct) {
       if (!struct || !Object.keys(struct).length) {
-        return '<div class="struct-line">CGOSTI structure could not be built for this run. The findings are not affected (see the warning below).</div>';
+        return '<div class="struct-line">CGOSTI structure could not be built for this run. The findings are not affected (see the notice above).</div>';
       }
       var html = '';
       layers.forEach(function(l) {
@@ -455,6 +469,7 @@
   function runAudit() {
     if (!lastAuditResult) { setStatus('⚠ Run Transform first.'); return; }
     hideErrorBox();
+    document.getElementById('noticeBox').style.display = 'none';   // the same warnings appear in the results
     setStatus('Rendering audit findings...');
     renderResults(lastAuditResult);
     highlightStructurePanels((lastAuditResult.audit || {}).findings);

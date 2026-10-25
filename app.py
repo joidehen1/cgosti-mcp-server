@@ -729,15 +729,17 @@ def _structure_one(text):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     problem = "no reply"
     result = None
-    for max_tokens in (4096, 8192):   # retry once with a larger limit if the reply is not valid JSON
+    base_prompt = f'Transform this into CGOSTI:\n\n"{text}"'
+    # Attempt 1 as normal; attempt 2 has a larger limit and an explicit "JSON only" instruction.
+    for max_tokens, suffix in ((4096, ""), (8192, "\n\nRespond with ONLY the JSON object. No explanation or commentary before or after it.")):
         msg = client.messages.create(
             model="claude-sonnet-4-6", max_tokens=max_tokens, temperature=0,
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": f'Transform this into CGOSTI:\n\n"{text}"'}]
+            messages=[{"role": "user", "content": base_prompt + suffix}]
         )
         raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
         try:
-            result = json.loads(raw)
+            result = _extract_json(raw)   # tolerates prose before or after the JSON
             break
         except json.JSONDecodeError:
             problem = f"stop_reason={getattr(msg, 'stop_reason', '?')}, reply began {raw[:80]!r}"
@@ -869,6 +871,11 @@ def _finalise_audit(audit, dedupe=True):
 #   8. A document that looks like JSON but is invalid is reported, and both
 #      runs are then compared as plain text so the formats line up. A key
 #      repeated inside one JSON object is reported as Duplicate.
+#   9. An item that would be reported as Missing or Drifted gets one extra
+#      check against the other items in its OWN document: if it repeats the
+#      meaning of another item under a different name it is Mixed, under the
+#      same name Duplicate. This catches a new field that merely renames or
+#      repeats an existing one.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Exact repeats of plain-text lines shorter than this many words are not flagged
@@ -915,6 +922,33 @@ Return ONLY valid JSON. No markdown. No backticks. Keys:
     related_id: string — the first occurrence's id for duplicate/mixed, otherwise ""
     recommendation: one concise sentence for every status except "match"; use "" for "match"
   summary: one to three sentences describing HOW the two runs differ. Do not restate the matches."""
+
+
+SYSTEM_PROMPT_AUDIT_LONE = """You are the CGOSTI Document Audit Comparator for Mighty Units Ltd.
+
+You are given the items of one or two documents, in order. The BASELINE document is the reference; the LATER RUN is a later version of the same document. Some items are marked [CHECK]. For each [CHECK] item, decide whether, inside its OWN document, it repeats the meaning of ANOTHER item of that same document:
+
+- "mixed": a different field name or label carries the same meaning as another item in the same document (for example "supplier" and "vendor" both naming the same supplier).
+- "duplicate": the same field name or label carries the same meaning as another item in the same document, whether the wording is identical or reworded.
+- "unique": it does not repeat the meaning of any other item in its own document.
+
+Be strict. Two items about different things that merely share a value are NOT mixed (for example "annual_value_gbp: 25000" and "liability_cap_gbp: 25000" are different fields). Compare only within the same document: a BASELINE item is only ever compared with other BASELINE items, and a LATER RUN item with other LATER RUN items.
+
+For "mixed" and "duplicate", set related_id to the id of the other item it repeats.
+
+Every [CHECK] item must appear exactly once. Return ONLY valid JSON. No markdown. No backticks. Keys:
+  results: array of objects, each with id (the item's id), status ("mixed", "duplicate" or "unique"), related_id (string, "" for unique)."""
+
+
+def _extract_json(raw):
+    """Parse a JSON object from a Claude reply, tolerating prose before or after it."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(raw[start:end + 1])
+        raise
 
 
 def _norm_unit(value):
@@ -1027,6 +1061,8 @@ def _audit_finding(status, src=None, sub=None, related=None, rec="", doc=None):
         "related_excerpt": related["text"] if related else "",
         "recommendation": rec,
         "_order": order,
+        "_u_src": src,
+        "_u_sub": sub,
     }
 
 
@@ -1128,7 +1164,7 @@ def _judge_leftovers(left_src, left_sub):
         messages=[{"role": "user", "content": listing}],
     )
     raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw), src_ids, sub_ids
+    return _extract_json(raw), src_ids, sub_ids
 
 
 def _replace_ids(text, all_ids):
@@ -1198,6 +1234,80 @@ def _apply_judgement(judged, src_ids, sub_ids):
     return findings, list(dict.fromkeys(warnings)), _replace_ids((judged.get("summary") or "").strip(), all_ids)
 
 
+def _claude_lone_call(listing):
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=2048, temperature=0,
+        system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_LONE, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": listing}],
+    )
+    raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    return _extract_json(raw)
+
+
+LONE_CONTEXT_CAP = 400   # most items of one document sent as context
+
+
+def _lone_candidates(findings):
+    """Missing / Drifted findings that stand for exactly one item."""
+    return [f for f in findings
+            if f["status"] in ("missing", "drifted") and len(f["_u_src"]) + len(f["_u_sub"]) == 1]
+
+
+def _check_lone_items(cands, src_units, sub_units):
+    """Ask Claude whether each lone item repeats another item's meaning inside
+    its own document. Returns {id(finding): (status, related_unit)}."""
+    sides = (("source", "BASELINE", "S", src_units), ("subject", "LATER RUN", "T", sub_units))
+    by_id, finding_for_unit, sections = {}, {}, []
+    for side, label, prefix, units in sides:
+        mine = [f for f in cands if f["document"] == side]
+        if not mine:
+            continue
+        lone_units = {}
+        for f in mine:
+            u = (f["_u_src"] or f["_u_sub"])[0]
+            lone_units[id(u)] = f
+        shown = list(units)
+        if len(shown) > LONE_CONTEXT_CAP:
+            keep = set(lone_units)
+            others = [u for u in shown if id(u) not in keep][:max(0, LONE_CONTEXT_CAP - len(keep))]
+            allowed = keep | {id(u) for u in others}
+            shown = [u for u in shown if id(u) in allowed]
+        lines = []
+        for u in shown:
+            uid = f"{prefix}{units.index(u) + 1}"
+            by_id[uid] = (side, u)
+            mark = "  [CHECK]" if id(u) in lone_units else ""
+            if mark:
+                finding_for_unit[uid] = lone_units[id(u)]
+            lines.append(f"{uid}: {u['text']}{mark}")
+        sections.append(f"{label} document:\n" + "\n".join(lines))
+    if not finding_for_unit:
+        return {}
+
+    results = _claude_lone_call("\n\n".join(sections)).get("results", [])
+    verdicts, seen = {}, set()
+    for r in results:
+        rid = str(r.get("id", ""))
+        status = str(r.get("status", "")).strip().lower()
+        if rid not in finding_for_unit or rid in seen or status not in ("mixed", "duplicate"):
+            continue
+        related = by_id.get(str(r.get("related_id", "")))
+        if not related or related[0] != by_id[rid][0] or related[1] is by_id[rid][1]:
+            continue    # related item must be a different item in the SAME document
+        seen.add(rid)
+        verdicts[id(finding_for_unit[rid])] = (status, related[1])
+    return verdicts
+
+
+def _apply_lone(findings, verdicts):
+    for i, f in enumerate(findings):
+        if id(f) in verdicts:
+            status, related = verdicts[id(f)]
+            findings[i] = _audit_finding(status, src=f["_u_src"], sub=f["_u_sub"], related=related,
+                                         rec=AUDIT_RECOMMENDATIONS[status], doc=f["document"])
+
+
 def _audit_summary(audit, n_src, n_sub, overview):
     labels = [("missing", "missing"), ("changed", "changed"), ("drifted", "drifted"),
               ("mixed", "mixed"), ("duplicate", "duplicate")]
@@ -1260,6 +1370,11 @@ def run_audit_compare(source, subject, include_structure=False):
             f_src = executor.submit(_safe_structure, source)
             f_sub = f_src if same_text else executor.submit(_safe_structure, subject)
         f_llm = executor.submit(_judge_leftovers, plan["left_src"], plan["left_sub"]) if plan["needs_llm"] else None
+        f_lone = None
+        if not plan["needs_llm"]:
+            early = _lone_candidates(plan["findings"])
+            if early:
+                f_lone = executor.submit(_check_lone_items, early, src_units, sub_units)
         if f_src is not None:
             source_structure, w_src = f_src.result()
             subject_structure, w_sub = f_sub.result()
@@ -1277,9 +1392,21 @@ def run_audit_compare(source, subject, include_structure=False):
         findings.extend(extra)
         warnings.extend(judge_warnings)
 
+    # Extra look at lone Missing / Drifted items (Mixed or Duplicate inside their own document).
+    try:
+        if f_lone is not None:
+            verdicts = f_lone.result()
+        else:
+            cands = _lone_candidates(findings)
+            verdicts = _check_lone_items(cands, src_units, sub_units) if cands else {}
+        _apply_lone(findings, verdicts)
+    except Exception:
+        warnings.append("Could not check whether missing or drifted items repeat another item's meaning; they are reported as Missing or Drifted.")
+
     findings.sort(key=lambda f: f["_order"])
     for f in findings:
-        f.pop("_order", None)
+        for private in ("_order", "_u_src", "_u_sub"):
+            f.pop(private, None)
 
     audit = _finalise_audit({"findings": findings}, dedupe=False)
     audit["summary"] = _audit_summary(audit, len(src_units), len(sub_units), overview)
