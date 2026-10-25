@@ -937,7 +937,7 @@ You are given the items of one or two documents, in order. The BASELINE document
 - "duplicate": the same field name or label carries the same meaning as another item in the same document, whether the wording is identical or reworded.
 - "unique": it does not repeat the meaning of any other item in its own document.
 
-Be strict. Two items about different things that merely share a value are NOT mixed (for example "annual_value_gbp: 25000" and "liability_cap_gbp: 25000" are different fields). Compare only within the same document: a BASELINE item is only ever compared with other BASELINE items, and a LATER RUN item with other LATER RUN items.
+Be strict. Items whose values differ (a different number, id, date, amount or name) never carry the same meaning: answer "unique" for them, for example "contract_id: SC-2005" and "contract_id2: SC-2006". Two items about different things that merely share a value are NOT mixed (for example "annual_value_gbp: 25000" and "liability_cap_gbp: 25000" are different fields). Compare only within the same document: a BASELINE item is only ever compared with other BASELINE items, and a LATER RUN item with other LATER RUN items.
 
 For "mixed" and "duplicate", set related_id to the id of the other item it repeats.
 
@@ -1262,6 +1262,27 @@ def _lone_candidates(findings):
             if f["status"] in ("missing", "drifted") and len(f["_u_src"]) + len(f["_u_sub"]) == 1]
 
 
+def _unit_value(u):
+    path = u.get("path")
+    return u["text"][len(path) + 2:] if path and u["text"].startswith(path + ": ") else u["text"]
+
+
+def _digit_runs(value):
+    return re.findall(r"\d+", value)
+
+
+def _lone_label(status, item, related):
+    """Decide Mixed or Duplicate from the field names (JSON items), and refuse
+    when the values clearly differ. Returns the label, or None for 'unique'."""
+    if item.get("path") and related.get("path"):
+        a, b = _unit_value(item), _unit_value(related)
+        da, db = _digit_runs(a), _digit_runs(b)
+        if (da or db) and da != db:
+            return None            # different number / id / date: not the same meaning
+        return "duplicate" if item["path"] == related["path"] else "mixed"
+    return status
+
+
 def _check_lone_items(cands, src_units, sub_units):
     """Ask Claude whether each lone item repeats another item's meaning inside
     its own document. Returns {id(finding): (status, related_unit)}."""
@@ -1303,8 +1324,11 @@ def _check_lone_items(cands, src_units, sub_units):
         related = by_id.get(str(r.get("related_id", "")))
         if not related or related[0] != by_id[rid][0] or related[1] is by_id[rid][1]:
             continue    # related item must be a different item in the SAME document
+        label = _lone_label(status, by_id[rid][1], related[1])
+        if label is None:
+            continue
         seen.add(rid)
-        verdicts[id(finding_for_unit[rid])] = (status, related[1])
+        verdicts[id(finding_for_unit[rid])] = (label, related[1])
     return verdicts
 
 
