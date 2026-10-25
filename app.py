@@ -829,6 +829,7 @@ def _finalise_audit(audit, dedupe=True):
             continue
         finding["status"] = status
         finding.setdefault("related_excerpt", "")
+        finding.setdefault("also", [])
         if not finding.get("document"):
             finding["document"] = (
                 "source" if status == "missing" else
@@ -838,7 +839,8 @@ def _finalise_audit(audit, dedupe=True):
 
     audit["findings"] = _dedupe_findings(cleaned) if dedupe else cleaned
     for status in AUDIT_STATUS_PRECEDENCE:
-        audit[f"{status}_count"] = sum(1 for f in audit["findings"] if f["status"] == status)
+        audit[f"{status}_count"] = sum(1 for f in audit["findings"]
+                                       if f["status"] == status or status in (f.get("also") or []))
     audit["verdict"] = _audit_verdict(audit)
     if skipped:
         audit["warnings"] = [f"{skipped} finding(s) with an unrecognised status were ignored."]
@@ -876,6 +878,9 @@ def _finalise_audit(audit, dedupe=True):
 #      meaning of another item under a different name it is Mixed, under the
 #      same name Duplicate. This catches a new field that merely renames or
 #      repeats an existing one.
+#  10. A Mixed or Duplicate item that also has no counterpart in the other
+#      document carries a second label (Drifted if it is in the later run,
+#      Missing if it is in the baseline) and is counted under both.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Exact repeats of plain-text lines shorter than this many words are not flagged
@@ -1045,7 +1050,7 @@ def _parse_units(text, force_text=False):
     return units, "text", [], note
 
 
-def _audit_finding(status, src=None, sub=None, related=None, rec="", doc=None):
+def _audit_finding(status, src=None, sub=None, related=None, rec="", doc=None, also=None):
     src = src or []
     sub = sub or []
     first = (src or sub)[0] if (src or sub) else None
@@ -1060,6 +1065,7 @@ def _audit_finding(status, src=None, sub=None, related=None, rec="", doc=None):
         "subject_excerpt": " | ".join(u["text"] for u in sub),
         "related_excerpt": related["text"] if related else "",
         "recommendation": rec,
+        "also": list(also or []),
         "_order": order,
         "_u_src": src,
         "_u_sub": sub,
@@ -1198,9 +1204,11 @@ def _apply_judgement(judged, src_ids, sub_ids):
 
         if status in ("duplicate", "mixed"):
             for k in s_keys:
-                findings.append(_audit_finding(status, src=[src_ids[k]], related=related, rec=rec, doc="source"))
+                findings.append(_audit_finding(status, src=[src_ids[k]], related=related, rec=rec, doc="source",
+                                               also=["missing"]))
             for k in t_keys:
-                findings.append(_audit_finding(status, sub=[sub_ids[k]], related=related, rec=rec, doc="subject"))
+                findings.append(_audit_finding(status, sub=[sub_ids[k]], related=related, rec=rec, doc="subject",
+                                               also=["drifted"]))
         elif status in ("match", "changed"):
             if s_keys and t_keys:
                 findings.append(_audit_finding(status, src=[src_ids[k] for k in s_keys],
@@ -1305,7 +1313,8 @@ def _apply_lone(findings, verdicts):
         if id(f) in verdicts:
             status, related = verdicts[id(f)]
             findings[i] = _audit_finding(status, src=f["_u_src"], sub=f["_u_sub"], related=related,
-                                         rec=AUDIT_RECOMMENDATIONS[status], doc=f["document"])
+                                         rec=AUDIT_RECOMMENDATIONS[status], doc=f["document"],
+                                         also=[f["status"]])   # it was Missing / Drifted before the extra check
 
 
 def _audit_summary(audit, n_src, n_sub, overview):
@@ -1317,6 +1326,9 @@ def _audit_summary(audit, n_src, n_sub, overview):
         bits = [f"{audit[k + '_count']} {name}" for k, name in labels if audit.get(k + "_count")]
         text = (f"Compared {n_src} baseline items with {n_sub} later-run items: "
                 f"{audit['match_count']} matched; " + (", ".join(bits) if bits else "no other findings") + ".")
+    dual = sum(1 for f in audit["findings"] if f.get("also"))
+    if dual:
+        text += f" {dual} item(s) carry two labels and are counted under both."
     if overview:
         text += " " + overview
     return text
@@ -1445,7 +1457,8 @@ def call_audit_compare(source, subject):
                        "mixed": "🟡", "drifted": "⚪", "duplicate": "🟣"}
         for finding in audit.get("findings", []):
             icon = status_icon.get(finding.get("status"), "•")
-            out += f"{icon} [{finding.get('layer', '').upper()}] {finding.get('status', '').upper()}\n"
+            label = " + ".join([finding.get("status", "")] + list(finding.get("also") or [])).upper()
+            out += f"{icon} [{finding.get('layer', '').upper()}] {label}\n"
             out += f"   Baseline: {finding.get('source_excerpt', '')}\n"
             out += f"   Later run: {finding.get('subject_excerpt', '')}\n"
             if finding.get("related_excerpt"):

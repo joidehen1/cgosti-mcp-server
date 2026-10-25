@@ -142,6 +142,7 @@
   .finding-status.mixed { color: var(--yellow); }
   .finding-status.drifted { color: var(--silver); }
   .finding-status.duplicate { color: var(--purple); }
+  .finding-status.also { margin-left: 8px; }
   .excerpt-row { font-size: 11px; color: #ccc; margin: 4px 0; line-height: 1.6; }
   .excerpt-label { color: var(--mid); font-weight: 700; }
   .recommendation { font-size: 11px; color: var(--cyan); margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); }
@@ -516,6 +517,7 @@
           <span>${icons[f.status] || '•'}</span>
           <span class="finding-layer">[${escapeHtml((f.layer||'').toUpperCase())}]</span>
           <span class="finding-status ${escapeHtml(f.status || '')}">${escapeHtml((f.status||'').toUpperCase())}</span>
+          ${(f.also || []).map(a => `<span class="finding-status also ${escapeHtml(a)}">+ ${escapeHtml(String(a).toUpperCase())}</span>`).join('')}
         </div>
         <div class="excerpt-row"><span class="excerpt-label">Baseline:</span> ${escapeHtml(f.source_excerpt) || '—'}</div>
         <div class="excerpt-row"><span class="excerpt-label">Later run:</span> ${escapeHtml(f.subject_excerpt) || '—'}</div>
@@ -543,7 +545,7 @@
     const audit = lastAuditResult.audit || {};
     const countsLine = STATES.map(st => `${st.label}: ${audit[st.key + '_count'] || 0}`).join('  ·  ');
     const text = `CGOSTI DOCUMENT AUDIT REPORT\nMighty Units Ltd\n\nVERDICT: ${(audit.verdict || 'Undetermined').toUpperCase()}\n${countsLine}\n\nSUMMARY\n${audit.summary}\n\n` +
-      (audit.findings || []).map(f => `[${f.layer}] ${f.status}\nBaseline: ${f.source_excerpt}\nLater run: ${f.subject_excerpt}\n` +
+      (audit.findings || []).map(f => `[${f.layer}] ${[f.status].concat(f.also || []).join(' + ')}\nBaseline: ${f.source_excerpt}\nLater run: ${f.subject_excerpt}\n` +
         (f.related_excerpt ? `First occurrence: ${f.related_excerpt}\n` : '') +
         `Recommendation: ${f.recommendation || 'N/A'}\n`).join('\n');
 
