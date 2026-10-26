@@ -739,7 +739,7 @@ def _structure_one(text):
     # Attempt 1 as normal; attempt 2 has a larger limit and an explicit "JSON only" instruction.
     for max_tokens, suffix in ((4096, ""), (8192, "\n\nRespond with ONLY the JSON object. No explanation or commentary before or after it.")):
         msg = client.messages.create(
-            model="claude-sonnet-5-5", max_tokens=max_tokens, temperature=0,
+            model="claude-sonnet-5-5", max_tokens=max_tokens,
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": base_prompt + suffix}]
         )
@@ -1171,7 +1171,7 @@ def _judge_leftovers(left_src, left_sub):
     )
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-sonnet-5-5", max_tokens=8192, temperature=0,
+        model="claude-sonnet-5-5", max_tokens=8192,
         system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_LEFTOVER, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": listing}],
     )
@@ -1251,7 +1251,7 @@ def _apply_judgement(judged, src_ids, sub_ids):
 def _claude_lone_call(listing):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-sonnet-5-5", max_tokens=2048, temperature=0,
+        model="claude-sonnet-5-5", max_tokens=4096,
         system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_LONE, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": listing}],
     )
@@ -1424,7 +1424,8 @@ def run_audit_compare(source, subject, include_structure=False):
         if f_llm is not None:
             try:
                 judged = f_llm.result()
-            except Exception:
+            except Exception as _e:
+                import traceback; traceback.print_exc()
                 return {"error": "The differing items could not be compared (the response was cut off or invalid). Try again, or use shorter documents."}
 
     findings = list(plan["findings"])
@@ -1752,7 +1753,7 @@ def classify_status_answer(status_text):
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         msg = client.messages.create(
-            model="claude-sonnet-5-5", max_tokens=10, temperature=0,
+            model="claude-sonnet-5-5", max_tokens=4096,
             system=[{"type": "text", "text":
                 "You classify a single compliance status word or phrase into exactly one category. "
                 "Reply with ONLY one word: YES, NO, or AMBIGUOUS — nothing else, no punctuation, no explanation. "
@@ -2117,7 +2118,7 @@ def _grc_user_message(ctx, extra=""):
 def _grc_model_call(system_prompt, messages, max_tokens):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-sonnet-5-5", max_tokens=max_tokens, temperature=0,
+        model="claude-sonnet-5-5", max_tokens=max_tokens,
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=messages,
     )
@@ -2517,7 +2518,7 @@ def adversarial_checklist_http():
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             msg = client.messages.create(
-                model="claude-sonnet-5-5", max_tokens=2048, temperature=0,
+                model="claude-sonnet-5-5", max_tokens=4096,
                 system=[{"type": "text", "text": SYSTEM_PROMPT_ADVERSARIAL_CHECKLIST, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content":
                     f"INSTRUCTION RULEBOOK:\n{rulebook}\n\nTACTICS UNDER TEST:\n{tactics}\n\nLAYER TO ASSESS THIS CALL: {layer}"}]
@@ -2595,7 +2596,7 @@ def northstar_transform_http():
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             msg = client.messages.create(
-                model="claude-sonnet-5-5", max_tokens=1024, temperature=0,
+                model="claude-sonnet-5-5", max_tokens=4096,
                 system=[{"type": "text", "text": SYSTEM_PROMPT_NORTHSTAR_SUBJECT, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content":
                     f"SOURCE (policy):\n{source}\n\nSUBJECT (worker record):\n{subject}\n\n"
