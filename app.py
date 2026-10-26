@@ -522,6 +522,12 @@ TOOLS = [
 
 # ── Helper functions ──
 
+def _msg_text(msg):
+    """Return the text of a Claude reply, skipping thinking blocks."""
+    parts = [getattr(b, "text", "") for b in getattr(msg, "content", []) if getattr(b, "type", "") == "text"]
+    return "".join(parts)
+
+
 def call_transform(subject, layers=None):
     if layers is None:
         layers = ["G", "O", "S", "T", "I+", "I-", "I±", "I∞"]
@@ -733,11 +739,11 @@ def _structure_one(text):
     # Attempt 1 as normal; attempt 2 has a larger limit and an explicit "JSON only" instruction.
     for max_tokens, suffix in ((4096, ""), (8192, "\n\nRespond with ONLY the JSON object. No explanation or commentary before or after it.")):
         msg = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=max_tokens, temperature=0,
+            model="claude-sonnet-5-5", max_tokens=max_tokens, temperature=0,
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": base_prompt + suffix}]
         )
-        raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+        raw = _msg_text(msg).replace("```json", "").replace("```", "").strip()
         try:
             result = _extract_json(raw)   # tolerates prose before or after the JSON
             break
@@ -1165,11 +1171,11 @@ def _judge_leftovers(left_src, left_sub):
     )
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=8192, temperature=0,
+        model="claude-sonnet-5-5", max_tokens=8192, temperature=0,
         system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_LEFTOVER, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": listing}],
     )
-    raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    raw = _msg_text(msg).replace("```json", "").replace("```", "").strip()
     return _extract_json(raw), src_ids, sub_ids
 
 
@@ -1245,11 +1251,11 @@ def _apply_judgement(judged, src_ids, sub_ids):
 def _claude_lone_call(listing):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=2048, temperature=0,
+        model="claude-sonnet-5-5", max_tokens=2048, temperature=0,
         system=[{"type": "text", "text": SYSTEM_PROMPT_AUDIT_LONE, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": listing}],
     )
-    raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    raw = _msg_text(msg).replace("```json", "").replace("```", "").strip()
     return _extract_json(raw)
 
 
@@ -1746,7 +1752,7 @@ def classify_status_answer(status_text):
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         msg = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=10, temperature=0,
+            model="claude-sonnet-5-5", max_tokens=10, temperature=0,
             system=[{"type": "text", "text":
                 "You classify a single compliance status word or phrase into exactly one category. "
                 "Reply with ONLY one word: YES, NO, or AMBIGUOUS — nothing else, no punctuation, no explanation. "
@@ -1759,7 +1765,7 @@ def classify_status_answer(status_text):
                 "(e.g. not provided, postponed, pending, TBC, unknown)."}],
             messages=[{"role": "user", "content": f'Status: "{status_text}"'}]
         )
-        answer = msg.content[0].text.strip().upper()
+        answer = _msg_text(msg).strip().upper()
         if answer == "YES":
             result = "yes"
         elif answer == "NO":
@@ -2111,11 +2117,11 @@ def _grc_user_message(ctx, extra=""):
 def _grc_model_call(system_prompt, messages, max_tokens):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=max_tokens, temperature=0,
+        model="claude-sonnet-5-5", max_tokens=max_tokens, temperature=0,
         system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=messages,
     )
-    raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+    raw = _msg_text(msg).replace("```json", "").replace("```", "").strip()
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise ValueError("The assessment did not return a JSON object.")
@@ -2511,12 +2517,12 @@ def adversarial_checklist_http():
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             msg = client.messages.create(
-                model="claude-sonnet-4-6", max_tokens=2048, temperature=0,
+                model="claude-sonnet-5-5", max_tokens=2048, temperature=0,
                 system=[{"type": "text", "text": SYSTEM_PROMPT_ADVERSARIAL_CHECKLIST, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content":
                     f"INSTRUCTION RULEBOOK:\n{rulebook}\n\nTACTICS UNDER TEST:\n{tactics}\n\nLAYER TO ASSESS THIS CALL: {layer}"}]
             )
-            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            raw = _msg_text(msg).replace("```json", "").replace("```", "").strip()
             result = json.loads(raw)
             encrypted = _fernet.encrypt(json.dumps(result).encode("utf-8"))
             _STRUCTURE_CACHE[cache_key] = encrypted
@@ -2589,13 +2595,13 @@ def northstar_transform_http():
                 return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             msg = client.messages.create(
-                model="claude-sonnet-4-6", max_tokens=1024, temperature=0,
+                model="claude-sonnet-5-5", max_tokens=1024, temperature=0,
                 system=[{"type": "text", "text": SYSTEM_PROMPT_NORTHSTAR_SUBJECT, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content":
                     f"SOURCE (policy):\n{source}\n\nSUBJECT (worker record):\n{subject}\n\n"
                     f"VERIFIED FINDINGS (ground truth — do not override):\n{json.dumps(verified_result, indent=2)}"}]
             )
-            raw = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            raw = _msg_text(msg).replace("```json", "").replace("```", "").strip()
             structured = json.loads(raw)
             encrypted = _fernet.encrypt(json.dumps(structured).encode("utf-8"))
             _STRUCTURE_CACHE[cache_key] = encrypted
