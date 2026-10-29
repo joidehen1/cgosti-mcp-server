@@ -182,11 +182,11 @@
 
   <div class="mode-row">
     <div class="mode-btn selected" id="modeCGO" onclick="selectMode('cgo')">
-      <div class="mode-title">SIMPLE VALIDATION (CGO)</div>
+      <div class="mode-title">POLICY AUDIT SYSTEM</div>
       <div class="mode-desc">Goal + Objectives only. One verdict. Faster, single call.</div>
     </div>
     <div class="mode-btn" id="modeCGOSTI" onclick="selectMode('cgosti')">
-      <div class="mode-title">COMPLEX VALIDATION (CGOSTI)</div>
+      <div class="mode-title">ADVERSARIAL AUDIT SYSTEM</div>
       <div class="mode-desc">Full five-layer assessment. Tab-based, one call per layer.</div>
     </div>
   </div>
@@ -489,14 +489,14 @@
   // ---- CGO (single result) ----
   function buildCGOJson(data, exportedAt) {
     return JSON.stringify({
-      report: 'CGOSTI GRC Assessment', mode: 'CGO (Simple)', generated_by: 'CGOSTI GRC System — Mighty Units Ltd',
+      report: 'CGOSTI GRC Assessment', mode: 'Policy Audit', generated_by: 'CGOSTI GRC System — Mighty Units Ltd',
       exported_at: exportedAt, evaluation_date: data.evaluation_date_used || null,
       statement: exportStatement(data.rulebook_pattern), result: data
     }, null, 2);
   }
 
   function buildCGOMarkdown(data, exportedAt) {
-    const L = ['# CGOSTI GRC Assessment — Simple (CGO)', ''];
+    const L = ['# CGOSTI GRC Assessment — Policy Audit', ''];
     L.push('- **Evaluation date:** ' + oneLine(data.evaluation_date_used || 'not recorded'));
     L.push('- **Rulebook pattern:** ' + patternLabel(data.rulebook_pattern));
     if (data.verdict_labels_found && data.verdict_labels_found.length) {
@@ -557,7 +557,7 @@
   function buildCGOSTIJson(scope, exportedAt) {
     const c = collectCGOSTI(scope);
     return JSON.stringify({
-      report: 'CGOSTI GRC Assessment', mode: 'CGOSTI (Complex)', generated_by: 'CGOSTI GRC System — Mighty Units Ltd',
+      report: 'CGOSTI GRC Assessment', mode: 'Adversarial Audit', generated_by: 'CGOSTI GRC System — Mighty Units Ltd',
       exported_at: exportedAt, scope: scope, layers_included: c.included, layers_not_assessed: c.notAssessed,
       evaluation_dates: c.dates, warnings: c.warnings,
       statement: exportStatement(c.included.map(function (l) { return layerResults[l].rulebook_pattern; })),
@@ -570,7 +570,7 @@
     const names = function (arr) { return arr.map(function (l) { return LAYER_LABEL[l]; }).join(', '); };
     const patterns = c.included.map(function (l) { return layerResults[l].rulebook_pattern; });
     const ignored = Array.from(new Set([].concat.apply([], c.included.map(function (l) { return layerResults[l].ignored_test_metadata_fields || []; }))));
-    const L = ['# CGOSTI GRC Assessment — Complex (CGOSTI)', ''];
+    const L = ['# CGOSTI GRC Assessment — Adversarial Audit', ''];
     L.push('- **Scope:** ' + (scope === 'partial' ? 'Partial — current tab only' : 'Full — all assessed layers'));
     L.push('- **Layers included:** ' + names(c.included));
     if (c.notAssessed.length) L.push('- **Not yet assessed (not in this report):** ' + names(c.notAssessed));
